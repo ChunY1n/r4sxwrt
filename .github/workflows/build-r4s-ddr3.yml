@@ -1,0 +1,302 @@
+# GitHub Actions 工作流：编译 X-WRT 固件 for NanoPi R4S DDR3 1GB
+# 原理：编译 X-WRT 标准固件后，用 immortalwrt 的 U-Boot 引导区域替换
+# immortalwrt 使用 rk3399_ddr_800MHz_v1.30.bin DDR 初始化二进制，同时支持 DDR3 和 LPDDR4
+#
+# 核心原理：
+# - X-WRT 使用 pine64-img 引导流程：单个 u-boot-rockchip.bin 写入 sector 64（LPDDR4 专用）
+# - immortalwrt 使用 pine64-bin 引导流程：idbloader(sector 64) + uboot.img(sector 16384) + trust.bin(sector 24576)
+# - 两者都保留 sector 64-32767 (16MB) 作为引导区域，分区表从 sector 32768 开始
+# - 用 immortalwrt 的引导区域替换 X-WRT 的引导区域，即可支持 DDR3
+
+name: Build X-WRT R4S DDR3
+
+on:
+  workflow_dispatch:
+    inputs:
+      xwrt_tag:
+        description: 'X-WRT 版本标签 (master=最新26.04开发版, 或具体标签如 26.04_b202606240712)'
+        required: true
+        default: 'master'
+      immwrt_tag:
+        description: 'immortalwrt 版本 (snapshot=每日最新, 或稳定版如 25.12.1)'
+        required: true
+        default: '25.12.1'
+
+env:
+  XWRT_TAG: ${{ github.event.inputs.xwrt_tag || 'master' }}
+  IMMWRT_TAG: ${{ github.event.inputs.immwrt_tag || '25.12.1' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # ============================================================
+    # 环境准备：安装依赖 + 清理磁盘空间
+    # ============================================================
+    - name: 初始化编译环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        # 清理磁盘空间（参考 x-wrt/build-release）
+        sudo -E apt-get update
+        sudo -E apt-get -y purge dotnet* azure* google* firefox* moby* mysql* \
+          libx11* firebird* gh* llvm-* postgresql* powershell* openjdk-* \
+          mpi-default-dev networkd-dispatcher pass* snapd *
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get clean
+
+        # 安装编译依赖
+        sudo -E apt-get update
+        sudo -E apt-get -y install build-essential asciidoc binutils bzip2 gawk \
+          gettext git libncurses5-dev libz-dev patch unzip zlib1g-dev \
+          libc6-dev-i386 subversion flex uglifyjs git-core \
+          gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo \
+          libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf \
+          automake libtool autopoint device-tree-compiler python3 python3-pip
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get clean
+
+        # 检查磁盘空间
+        echo "=== 磁盘空间 ==="
+        df -h .
+        echo "================"
+
+    # ============================================================
+    # 第一步：下载 immortalwrt 预编译固件（提取 DDR3 兼容的 U-Boot）
+    # ============================================================
+    - name: 下载 immortalwrt R4S 预编译固件
+      run: |
+        mkdir -p immwrt
+        cd immwrt
+
+        IMMWRT_BASE="https://downloads.immortalwrt.org"
+
+        if [ "$IMMWRT_TAG" = "snapshot" ]; then
+          IMMWRT_URL="$IMMWRT_BASE/snapshots/targets/rockchip/armv8"
+        else
+          IMMWRT_URL="$IMMWRT_BASE/releases/${IMMWRT_TAG}/targets/rockchip/armv8"
+        fi
+
+        echo "从 $IMMWRT_URL 下载..."
+
+        # 下载目录页面
+        wget -q "$IMMWRT_URL/" -O index.html || {
+          echo "无法访问 $IMMWRT_URL/"
+          echo "请检查 immortalwrt 下载页面: https://downloads.immortalwrt.org"
+          exit 1
+        }
+
+        # 查找 R4S squashfs sysupgrade 固件（非 enterprise 版）
+        # 文件名格式：immortalwrt-<version>-rockchip-armv8-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz
+        IMG_FILE=$(grep -oP 'immortalwrt-[^"]*friendlyarm_nanopi-r4s-squashfs-sysupgrade\.img\.gz' index.html | head -1)
+
+        if [ -z "$IMG_FILE" ]; then
+          echo "未找到非 enterprise 版 R4S 固件，尝试 enterprise 版..."
+          IMG_FILE=$(grep -oP 'immortalwrt-[^"]*friendlyarm_nanopi-r4s-enterprise-squashfs-sysupgrade\.img\.gz' index.html | head -1)
+        fi
+
+        if [ -z "$IMG_FILE" ]; then
+          echo "未找到 R4S 固件，列出可用文件："
+          grep -oP 'immortalwrt-[^"]*\.img\.gz' index.html | head -20
+          exit 1
+        fi
+
+        echo "下载固件: $IMG_FILE"
+        wget -q "$IMMWRT_URL/$IMG_FILE" -O immwrt-r4s.img.gz
+        gunzip immwrt-r4s.img.gz
+
+        echo "immortalwrt 固件下载完成:"
+        ls -lh immwrt-r4s.img
+
+        # 验证引导区域结构
+        echo "=== immortalwrt 引导区域结构 ==="
+        echo "sector 64 (idbloader):"
+        dd if=immwrt-r4s.img bs=512 skip=64 count=1 2>/dev/null | xxd | head -4
+        echo "sector 16384 (uboot.img):"
+        dd if=immwrt-r4s.img bs=512 skip=16384 count=1 2>/dev/null | xxd | head -4
+        echo "sector 24576 (trust.bin):"
+        dd if=immwrt-r4s.img bs=512 skip=24576 count=1 2>/dev/null | xxd | head -4
+        echo "================================"
+
+    # ============================================================
+    # 第二步：克隆并编译 X-WRT 固件
+    # ============================================================
+    - name: 克隆 X-WRT 源码
+      run: |
+        git clone --depth 1 --branch "$XWRT_TAG" https://github.com/x-wrt/x-wrt.git
+        echo "X-WRT 版本: $(cd x-wrt && git log --oneline -1)"
+
+    - name: 更新 feeds
+      run: cd x-wrt && ./scripts/feeds update -a
+
+    - name: 安装 feeds
+      run: cd x-wrt && ./scripts/feeds install -a
+
+    - name: 编译 X-WRT (rockchip-armv8)
+      run: |
+        cd x-wrt
+
+        # 复制构建脚本和版本标签
+        cp ../build.sh .
+        cp ../upload.sh .
+
+        # 创建版本标签文件
+        if [ "$XWRT_TAG" = "master" ]; then
+          echo "26.04_b$(date -u '+%Y%m%d%H%M%S')" > release.tag
+        else
+          echo "$XWRT_TAG" > release.tag
+        fi
+        echo "版本标签: $(cat release.tag)"
+
+        # 确认 rockchip-armv8 配置存在
+        if [ -f feeds/x/rom/lede/cfg.list ]; then
+          echo "=== cfg.list 中的 rockchip 配置 ==="
+          grep rockchip feeds/x/rom/lede/cfg.list || echo "未找到 rockchip 配置"
+        else
+          echo "警告: cfg.list 不存在"
+        fi
+
+        # 确认 config.rockchip-armv8 存在
+        if [ -f feeds/x/rom/lede/config.rockchip-armv8 ]; then
+          echo "config.rockchip-armv8 存在"
+          grep -i "r4s" feeds/x/rom/lede/config.rockchip-armv8 | head -5 || echo "config 中未找到 r4s"
+        else
+          echo "警告: config.rockchip-armv8 不存在"
+        fi
+
+        # 检查磁盘空间
+        echo "=== 编译前磁盘空间 ==="
+        df -h .
+        echo "======================"
+
+        # 使用 X-WRT 官方构建流程
+        echo "开始编译 (TARGET=rockchip-armv8, $(nproc) threads)..."
+        TARGET=rockchip-armv8 sh build.sh $(nproc)
+
+        # 检查编译产物
+        echo "=== 编译产物 ==="
+        find bin/targets/rockchip/ -name "*.img*" 2>/dev/null | while read f; do
+          ls -lh "$f"
+        done
+        echo "================"
+
+    # ============================================================
+    # 第三步：查找编译产物并替换 U-Boot
+    # ============================================================
+    - name: 替换 U-Boot 引导区域
+      run: |
+        cd x-wrt
+
+        # 查找 X-WRT R4S 固件
+        XWRT_IMG=$(find bin/targets/rockchip/armv8/ \
+          -name "*nanopi-r4s*squashfs*sysupgrade*.img*" 2>/dev/null | head -1)
+
+        if [ -z "$XWRT_IMG" ]; then
+          # 尝试不带 squashfs 过滤
+          XWRT_IMG=$(find bin/targets/rockchip/armv8/ \
+            -name "*nanopi-r4s*sysupgrade*.img*" 2>/dev/null | head -1)
+        fi
+
+        if [ -z "$XWRT_IMG" ]; then
+          echo "未找到 R4S 固件文件"
+          echo "bin/targets/rockchip/armv8/ 目录内容:"
+          ls -la bin/targets/rockchip/armv8/ 2>/dev/null || true
+          exit 1
+        fi
+
+        # 如果是 .gz 压缩文件，解压
+        if [[ "$XWRT_IMG" == *.gz ]]; then
+          gunzip "$XWRT_IMG"
+          XWRT_IMG="${XWRT_IMG%.gz}"
+        fi
+
+        IMMWRT_IMG="../immwrt/immwrt-r4s.img"
+
+        echo "=== 替换 U-Boot ==="
+        echo "X-WRT 固件: $XWRT_IMG"
+        echo "immortalwrt 固件: $IMMWRT_IMG"
+
+        # 验证文件
+        test -f "$XWRT_IMG" || { echo "X-WRT 固件不存在"; exit 1; }
+        test -f "$IMMWRT_IMG" || { echo "immortalwrt 固件不存在"; exit 1; }
+
+        # 验证 X-WRT 原始引导区域（应为 pine64-img 单文件格式）
+        echo "=== X-WRT 原始引导区域 (sector 64) ==="
+        dd if="$XWRT_IMG" bs=512 skip=64 count=1 2>/dev/null | xxd | head -4
+        echo "======================================="
+
+        # 替换引导区域：sector 64 到 sector 32767 (16MB)
+        # sector 64 = offset 32768 bytes
+        # 32704 sectors * 512 bytes = 16773120 bytes (~16MB)
+        # 保留 sector 0-63 (GPT 分区表)
+        # 保留 sector 32768+ (分区数据)
+        echo "从 immortalwrt 提取引导区域 (sector 64-32767, ~16MB)..."
+        dd if="$IMMWRT_IMG" of=uboot-boot-area.bin bs=512 skip=64 count=32704 status=progress
+
+        echo "写入 X-WRT 固件 (sector 64)..."
+        dd if=uboot-boot-area.bin of="$XWRT_IMG" seek=64 conv=notrunc status=progress
+
+        # 验证替换后的引导区域
+        echo "=== 替换后引导区域 (sector 64) ==="
+        dd if="$XWRT_IMG" bs=512 skip=64 count=1 2>/dev/null | xxd | head -4
+        echo "==================================="
+
+        echo "=== U-Boot 替换完成 ==="
+        ls -lh "$XWRT_IMG"
+
+        # 保存路径
+        echo "XWRT_IMG=$XWRT_IMG" > ../img_path.txt
+        echo "XWRT_IMG_FULL=$(pwd)/$XWRT_IMG" >> ../img_path.txt
+
+    # ============================================================
+    # 第四步：打包上传
+    # ============================================================
+    - name: 压缩固件
+      run: |
+        source img_path.txt
+        OUTPUT_DIR="firmware"
+        mkdir -p "$OUTPUT_DIR"
+
+        VERSION_TAG=$(cat x-wrt/release.tag)
+
+        # 压缩固件
+        gzip -c "$XWRT_IMG" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img.gz"
+
+        # 同时保留未压缩版本
+        cp "$XWRT_IMG" "$OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img"
+
+        # 生成信息文件
+        cat > "$OUTPUT_DIR/README.txt" << EOF
+X-WRT for NanoPi R4S DDR3 1GB
+================================
+X-WRT 版本: $VERSION_TAG
+U-Boot 来源: immortalwrt $IMMWRT_TAG
+编译日期: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+刷写方法:
+1. 使用 balenaEtcher 或 dd 将 .img.gz 刷入 SD 卡
+2. 或解压后使用 .img 文件刷写
+
+技术说明:
+- X-WRT 原始固件使用 LPDDR4 专用 U-Boot，不兼容 DDR3 版本
+- 本固件已将引导区域 (sector 64-32767, 16MB) 替换为 immortalwrt 的引导区域
+- immortalwrt 使用 rk3399_ddr_800MHz_v1.30.bin，支持 DDR3/LPDDR3/LPDDR4 自动检测
+- 分区表和文件系统保持 X-WRT 原样，仅替换引导区域
+
+注意:
+- sysupgrade 升级时不会覆盖 U-Boot
+- 如升级后无法启动，需重新替换 U-Boot
+EOF
+
+        ls -lh "$OUTPUT_DIR/"
+
+    - name: 上传固件
+      uses: actions/upload-artifact@v4
+      with:
+        name: xwrt-r4s-ddr3-firmware
+        path: firmware/
+        retention-days: 30
