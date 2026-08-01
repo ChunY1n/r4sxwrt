@@ -270,27 +270,25 @@ jobs:
         cp "$XWRT_IMG" "$OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img"
 
         # 生成信息文件
-        cat > "$OUTPUT_DIR/README.txt" << EOF
-X-WRT for NanoPi R4S DDR3 1GB
-================================
-X-WRT 版本: $VERSION_TAG
-U-Boot 来源: immortalwrt $IMMWRT_TAG
-编译日期: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
-刷写方法:
-1. 使用 balenaEtcher 或 dd 将 .img.gz 刷入 SD 卡
-2. 或解压后使用 .img 文件刷写
-
-技术说明:
-- X-WRT 原始固件使用 LPDDR4 专用 U-Boot，不兼容 DDR3 版本
-- 本固件已将引导区域 (sector 64-32767, 16MB) 替换为 immortalwrt 的引导区域
-- immortalwrt 使用 rk3399_ddr_800MHz_v1.30.bin，支持 DDR3/LPDDR3/LPDDR4 自动检测
-- 分区表和文件系统保持 X-WRT 原样，仅替换引导区域
-
-注意:
-- sysupgrade 升级时不会覆盖 U-Boot
-- 如升级后无法启动，需重新替换 U-Boot
-EOF
+        echo "X-WRT for NanoPi R4S DDR3 1GB" > "$OUTPUT_DIR/README.txt"
+        echo "================================" >> "$OUTPUT_DIR/README.txt"
+        echo "X-WRT 版本: $VERSION_TAG" >> "$OUTPUT_DIR/README.txt"
+        echo "U-Boot 来源: immortalwrt $IMMWRT_TAG" >> "$OUTPUT_DIR/README.txt"
+        echo "编译日期: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$OUTPUT_DIR/README.txt"
+        echo "" >> "$OUTPUT_DIR/README.txt"
+        echo "刷写方法:" >> "$OUTPUT_DIR/README.txt"
+        echo "1. 使用 balenaEtcher 或 dd 将 .img.gz 刷入 SD 卡" >> "$OUTPUT_DIR/README.txt"
+        echo "2. 或解压后使用 .img 文件刷写" >> "$OUTPUT_DIR/README.txt"
+        echo "" >> "$OUTPUT_DIR/README.txt"
+        echo "技术说明:" >> "$OUTPUT_DIR/README.txt"
+        echo "- X-WRT 原始固件使用 LPDDR4 专用 U-Boot，不兼容 DDR3 版本" >> "$OUTPUT_DIR/README.txt"
+        echo "- 本固件已将引导区域 (sector 64-32767, 16MB) 替换为 immortalwrt 的引导区域" >> "$OUTPUT_DIR/README.txt"
+        echo "- immortalwrt 使用 rk3399_ddr_800MHz_v1.30.bin，支持 DDR3/LPDDR3/LPDDR4 自动检测" >> "$OUTPUT_DIR/README.txt"
+        echo "- 分区表和文件系统保持 X-WRT 原样，仅替换引导区域" >> "$OUTPUT_DIR/README.txt"
+        echo "" >> "$OUTPUT_DIR/README.txt"
+        echo "注意:" >> "$OUTPUT_DIR/README.txt"
+        echo "- sysupgrade 升级时不会覆盖 U-Boot" >> "$OUTPUT_DIR/README.txt"
+        echo "- 如升级后无法启动，需重新替换 U-Boot" >> "$OUTPUT_DIR/README.txt"
 
         ls -lh "$OUTPUT_DIR/"
 
