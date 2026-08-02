@@ -251,24 +251,32 @@ jobs:
 
         {
           echo 'X-WRT for NanoPi R4S DDR3 1GB'
-          echo '================================'
-          echo "X-WRT 版本: $VERSION_TAG"
-          echo "U-Boot 来源: immortalwrt $IMMWRT_TAG"
-          echo "编译日期: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo '============================='
           echo ''
-          echo '刷写方法:'
-          echo '1. 使用 balenaEtcher 或 dd 将 .img.gz 刷入 SD 卡'
-          echo '2. 或解压后使用 .img 文件刷写'
+          echo "Version : $VERSION_TAG"
+          echo "U-Boot  : immortalwrt $IMMWRT_TAG (rk3399_ddr_800MHz_v1.30.bin)"
+          echo "Built   : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo ''
-          echo '技术说明:'
-          echo '- X-WRT 原版固件使用 pine64-img 引导流程，其 U-Boot TPL 仅支持 LPDDR4，不兼容 DDR3 1GB 版'
-          echo '- 本固件已将引导区 (sector 64-32767, 16MB) 替换为 immortalwrt 的引导区'
-          echo '- immortalwrt 使用 rk3399_ddr_800MHz_v1.30.bin，支持 DDR3/LPDDR3/LPDDR4 自动检测'
-          echo '- 分区表 (MBR) 和文件系统保持 X-WRT 原样，仅替换引导区'
+          echo 'Files'
+          echo '-----'
+          echo "- $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img.gz : flash this file"
+          echo "- $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img     : raw image"
+          echo "- $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.sha256  : SHA256 checksum"
           echo ''
-          echo '注意:'
-          echo '- sysupgrade 升级时不会覆盖 U-Boot'
-          echo '- 如果之后刷写 X-WRT 官方原版镜像，会恢复为仅支持 LPDDR4 的 U-Boot'
+          echo 'Flash'
+          echo '-----'
+          echo '1. Verify checksum:'
+          echo "   sha256sum -c $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.sha256"
+          echo '2. Write to SD card with balenaEtcher, or:'
+          echo "   gunzip -c $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync"
+          echo '3. Boot on NanoPi R4S 1GB (DDR3)'
+          echo '4. LuCI: http://192.168.15.1'
+          echo ''
+          echo 'Notes'
+          echo '-----'
+          echo '- Boot area (sector 64-32767) is replaced with immortalwrt U-Boot'
+          echo '- sysupgrade keeps U-Boot, so DDR3 support survives upgrades'
+          echo '- Flashing the official X-WRT image restores the LPDDR4-only U-Boot'
         } > "$OUTPUT_DIR/README.txt"
 
         ls -lh "$OUTPUT_DIR/"
