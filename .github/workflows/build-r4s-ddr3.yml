@@ -107,7 +107,14 @@ jobs:
 
         echo "下载固件: $IMG_FILE"
         wget -q "$IMMWRT_URL/$IMG_FILE" -O immwrt-r4s.img.gz
-        gunzip immwrt-r4s.img.gz
+        # OpenWrt 的 sysupgrade .img.gz 在 gzip 流后会附加 JSON 元数据，
+        # gzip 解压成功但退出码为 2（warning），需要容忍该退出码
+        gzip -dc immwrt-r4s.img.gz > immwrt-r4s.img || rc=$?
+        if [ "${rc:-0}" -ne 0 ] && [ "${rc:-0}" -ne 2 ]; then
+            echo "错误: immwrt-r4s.img.gz 解压失败 (gzip 退出码 ${rc:-0})"
+            exit 1
+        fi
+        rm -f immwrt-r4s.img.gz
 
         ls -lh immwrt-r4s.img
 
@@ -206,7 +213,12 @@ jobs:
 
         # 如果是 .gz 压缩文件，先解压
         if [[ "$XWRT_IMG" == *.gz ]]; then
-          gunzip "$XWRT_IMG"
+          gzip -dc "$XWRT_IMG" > "${XWRT_IMG%.gz}" || rc=$?
+          if [ "${rc:-0}" -ne 0 ] && [ "${rc:-0}" -ne 2 ]; then
+            echo "错误: X-WRT 固件解压失败 (gzip 退出码 ${rc:-0})"
+            exit 1
+          fi
+          rm -f "$XWRT_IMG"
           XWRT_IMG="${XWRT_IMG%.gz}"
         fi
 
