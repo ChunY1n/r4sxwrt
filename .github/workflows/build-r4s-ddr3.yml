@@ -1,34 +1,35 @@
-# GitHub Actions 工作流：编译 X-WRT 固件 for NanoPi R4S DDR3 1GB
-# 原理：编译 X-WRT 标准固件后，用 immortalwrt 的 U-Boot 引导区替换
-# immortalwrt 使用 rk3399_ddr_800MHz_v1.30.bin DDR 初始化二进制，同时支持 DDR3 和 LPDDR4
+# GitHub Actions 工作流：编译 X-WRT 固件 for NanoPi R4S DDR3 1GB（内置 dae）
 #
-# 核心原理：
-# - X-WRT 使用 pine64-img 引导流程：单个 u-boot-rockchip.bin 写入 sector 64（TPL 仅 LPDDR4）
-# - immortalwrt 使用 pine64-bin 引导流程：idbloader(sector 64) + uboot.img(sector 16384) + trust.bin(sector 24576)
-# - 两个镜像的 MBR 分区表都从 sector 65536 (32MB) 开始，sector 64-32767 是引导保留区
-# - 用 immortalwrt 的引导区替换 X-WRT 的引导区，即可支持 DDR3 1GB 版
+# 原理：编译 X-WRT 标准固件后，用 immortalwrt 的 U-Boot 引导区替换，
+# 支持 DDR3 1GB 版本（rk3399_ddr_800MHz_v1.30.bin DDR 初始化，自动识别 DDR3/LPDDR4）
+#
+# 本版在原有基础上新增：
+# - 内核开启 BTF / BPF_EVENTS / KPROBE_EVENTS（dae CO-RE 必需）
+# - 内置 dae、luci-app-dae、dae-geoip、dae-geosite
+# - 内核模块 kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy
+# - 编译产物附带全部 dae 相关 apk
 
-name: Build X-WRT R4S DDR3
+name: Build X-WRT R4S DDR3 (with dae)
 
 on:
   workflow_dispatch:
     inputs:
       xwrt_tag:
-        description: 'X-WRT 分支/标签 (master=26.04 开发版, 或稳定分支如 v26.04_b202604250947)'
+        description: 'X-WRT 分支/标签 (master=26.04 开发版, 或稳定标签如 26.04_b202607300654)'
         required: true
-        default: 'v26.04_b202604250947'
+        default: '26.04_b202607300654'
       immwrt_tag:
         description: 'immortalwrt 版本 (snapshot=每日最新, 或稳定版如 25.12.1)'
         required: true
         default: '25.12.1'
 
 env:
-  XWRT_TAG: ${{ github.event.inputs.xwrt_tag || 'v26.04_b202604250947' }}
+  XWRT_TAG: ${{ github.event.inputs.xwrt_tag || '26.04_b202607300654' }}
   IMMWRT_TAG: ${{ github.event.inputs.immwrt_tag || '25.12.1' }}
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout
@@ -61,7 +62,8 @@ jobs:
           gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo \
           libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf \
           automake libtool autopoint device-tree-compiler \
-          python3 python3-pip python3-dev python3-setuptools python3-pyelftools swig
+          python3 python3-pip python3-dev python3-setuptools python3-pyelftools swig \
+          clang llvm jq pahole
         sudo -E apt-get -y autoremove --purge || true
         sudo -E apt-get clean
 
@@ -142,6 +144,21 @@ jobs:
     - name: 安装 feeds
       run: cd x-wrt && ./scripts/feeds install -a
 
+    - name: 添加 dae 软件源与界面包
+      run: |
+        cd x-wrt
+        # dae / dae-geoip / dae-geosite 来自社区打包源
+        echo 'src-git dae https://github.com/douglarek/dae-openwrt.git' >> feeds.conf.default
+        ./scripts/feeds update dae
+        ./scripts/feeds install -a
+        # luci-app-dae 界面（本仓库内置）
+        cp -r ../packages/luci-app-dae package/luci-app-dae
+        # 固定到 dae 最新发布版本（feed 默认值是占位符）
+        DAETAG=$(curl -s https://api.github.com/repos/daeuniverse/dae/releases/latest | jq -r .tag_name | tr -d 'v')
+        echo "dae 版本: $DAETAG"
+        sed -i "s/PKG_VERSION:=stable/PKG_VERSION:=$DAETAG/" package/feeds/dae/dae/Makefile
+        grep '^PKG_VERSION' package/feeds/dae/dae/Makefile
+
     - name: 编译 X-WRT (rockchip-armv8)
       run: |
         cd x-wrt
@@ -175,6 +192,27 @@ jobs:
         grep -q 'CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r4s=y' feeds/x/rom/lede/config.rockchip-armv8 || {
           echo "错误: R4S 设备配置未生效"; exit 1; }
 
+        # ---- dae / BTF 相关配置 ----
+        cat >> feeds/x/rom/lede/config.rockchip-armv8 <<'EOF'
+CONFIG_PACKAGE_luci-app-dae=y
+CONFIG_PACKAGE_dae=y
+CONFIG_PACKAGE_dae-geoip=y
+CONFIG_PACKAGE_dae-geosite=y
+CONFIG_PACKAGE_kmod-sched-core=y
+CONFIG_PACKAGE_kmod-sched-bpf=y
+CONFIG_PACKAGE_kmod-veth=y
+CONFIG_PACKAGE_kmod-xdp-sockets-diag=y
+CONFIG_PACKAGE_kmod-nft-tproxy=y
+CONFIG_PACKAGE_v2ray-geoip=y
+CONFIG_PACKAGE_v2ray-geosite=y
+CONFIG_PACKAGE_ca-bundle=y
+CONFIG_KERNEL_DEBUG_INFO=y
+CONFIG_KERNEL_DEBUG_INFO_BTF=y
+CONFIG_KERNEL_BPF_EVENTS=y
+CONFIG_KERNEL_KPROBE_EVENTS=y
+EOF
+        grep -E 'CONFIG_PACKAGE_dae=|CONFIG_KERNEL_DEBUG_INFO_BTF=' feeds/x/rom/lede/config.rockchip-armv8
+
         echo "=== 编译前磁盘空间 ==="
         df -h .
         echo "======================"
@@ -188,10 +226,16 @@ jobs:
         done
         echo "================"
 
+    - name: 验证内核 BTF 与模块配置
+      run: |
+        cd x-wrt
+        echo "=== .config 关键项 ==="
+        grep -E 'CONFIG_DEBUG_INFO_BTF=|CONFIG_VETH=|CONFIG_NET_SCHED_BPF=|CONFIG_XDP_SOCKETS_DIAG=' .config || true
+
     # ============================================================
     # 第三步：替换 U-Boot 引导区
     # ============================================================
-    - name: 替换 U-Boot 引导区域
+    - name: 替换 U-Boot 引导区
       run: |
         cd x-wrt
         rm -f ../firmware_paths.txt
@@ -258,17 +302,24 @@ jobs:
         done < firmware_paths.txt
 
         {
-          echo 'X-WRT for NanoPi R4S DDR3 1GB'
-          echo '============================='
+          echo 'X-WRT for NanoPi R4S DDR3 1GB (with dae)'
+          echo '=========================================='
           echo ''
           echo "Version : $VERSION_TAG"
           echo "U-Boot  : immortalwrt $IMMWRT_TAG (rk3399_ddr_800MHz_v1.30.bin)"
           echo "Built   : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo ''
+          echo 'Includes'
+          echo '--------'
+          echo '- Kernel BTF (CONFIG_DEBUG_INFO_BTF) for dae CO-RE'
+          echo '- dae / luci-app-dae / dae-geoip / dae-geosite'
+          echo '- kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy'
+          echo ''
           echo 'Files'
           echo '-----'
           echo "- squashfs: xwrt-r4s-ddr3-squashfs-${VERSION_TAG}.img.gz"
           echo "- ext4    : xwrt-r4s-ddr3-ext4-${VERSION_TAG}.img.gz"
+          echo '- apks/   : dae 相关独立软件包'
           echo ''
           echo 'Flash'
           echo '-----'
@@ -283,9 +334,19 @@ jobs:
           echo '- Boot area (sector 64-32767) is replaced with immortalwrt U-Boot'
           echo '- sysupgrade keeps U-Boot, so DDR3 support survives upgrades'
           echo '- Flashing the official X-WRT image restores the LPDDR4-only U-Boot'
+          echo '- Check /sys/kernel/btf/vmlinux exists before starting dae'
         } > "$OUTPUT_DIR/README.txt"
 
         ls -lh "$OUTPUT_DIR/"
+
+    - name: 收集 dae 相关 apk
+      run: |
+        cd x-wrt
+        mkdir -p ../firmware/apks
+        find bin/packages -name '*.apk' | grep -E '/(dae|luci-app-dae|kmod-(sched-core|sched-bpf|veth|xdp-sockets-diag)|v2ray-geo)' \
+          | xargs -r -I{} cp {} ../firmware/apks/
+        echo "=== apk 列表 ==="
+        ls -lh ../firmware/apks/
 
     - name: 上传固件
       uses: actions/upload-artifact@v4
