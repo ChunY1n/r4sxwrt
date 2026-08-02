@@ -194,23 +194,23 @@ jobs:
 
         # ---- dae / BTF 相关配置 ----
         cat >> feeds/x/rom/lede/config.rockchip-armv8 <<'EOF'
-CONFIG_PACKAGE_luci-app-dae=y
-CONFIG_PACKAGE_dae=y
-CONFIG_PACKAGE_dae-geoip=y
-CONFIG_PACKAGE_dae-geosite=y
-CONFIG_PACKAGE_kmod-sched-core=y
-CONFIG_PACKAGE_kmod-sched-bpf=y
-CONFIG_PACKAGE_kmod-veth=y
-CONFIG_PACKAGE_kmod-xdp-sockets-diag=y
-CONFIG_PACKAGE_kmod-nft-tproxy=y
-CONFIG_PACKAGE_v2ray-geoip=y
-CONFIG_PACKAGE_v2ray-geosite=y
-CONFIG_PACKAGE_ca-bundle=y
-CONFIG_KERNEL_DEBUG_INFO=y
-CONFIG_KERNEL_DEBUG_INFO_BTF=y
-CONFIG_KERNEL_BPF_EVENTS=y
-CONFIG_KERNEL_KPROBE_EVENTS=y
-EOF
+        CONFIG_PACKAGE_luci-app-dae=y
+        CONFIG_PACKAGE_dae=y
+        CONFIG_PACKAGE_dae-geoip=y
+        CONFIG_PACKAGE_dae-geosite=y
+        CONFIG_PACKAGE_kmod-sched-core=y
+        CONFIG_PACKAGE_kmod-sched-bpf=y
+        CONFIG_PACKAGE_kmod-veth=y
+        CONFIG_PACKAGE_kmod-xdp-sockets-diag=y
+        CONFIG_PACKAGE_kmod-nft-tproxy=y
+        CONFIG_PACKAGE_v2ray-geoip=y
+        CONFIG_PACKAGE_v2ray-geosite=y
+        CONFIG_PACKAGE_ca-bundle=y
+        CONFIG_KERNEL_DEBUG_INFO=y
+        CONFIG_KERNEL_DEBUG_INFO_BTF=y
+        CONFIG_KERNEL_BPF_EVENTS=y
+        CONFIG_KERNEL_KPROBE_EVENTS=y
+        EOF
         grep -E 'CONFIG_PACKAGE_dae=|CONFIG_KERNEL_DEBUG_INFO_BTF=' feeds/x/rom/lede/config.rockchip-armv8
 
         echo "=== 编译前磁盘空间 ==="
