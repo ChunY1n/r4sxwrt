@@ -164,8 +164,8 @@ jobs:
         cd x-wrt
         cp feeds/x/rom/lede/config.rockchip-armv8 .config
         make defconfig
-        make tools/compile -j$(nproc)
-        make package/kernel/bpf-headers/compile V=s -j1
+        make tools/compile toolchain/compile -j$(nproc)
+        make package/kernel/bpf-headers/compile V=s -j$(nproc)
 
     - name: 编译 X-WRT (rockchip-armv8)
       run: |
