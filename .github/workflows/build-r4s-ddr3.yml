@@ -254,7 +254,6 @@ jobs:
           [ -n "$VARIANT" ] || VARIANT="img"
 
           gzip -c "$IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VARIANT}-${VERSION_TAG}.img.gz"
-          cp "$IMG_FULL" "$OUTPUT_DIR/xwrt-r4s-ddr3-${VARIANT}-${VERSION_TAG}.img"
           sha256sum "$IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VARIANT}-${VERSION_TAG}.sha256"
         done < firmware_paths.txt
 
