@@ -194,60 +194,69 @@ jobs:
     - name: 替换 U-Boot 引导区域
       run: |
         cd x-wrt
+        rm -f ../firmware_paths.txt
 
-        # 查找 X-WRT R4S 固件（排除 enterprise 版）
-        XWRT_IMG=$(find bin/targets/rockchip/armv8/ \
-          -name "*nanopi-r4s*squashfs*sysupgrade*.img*" \
-          ! -name "*enterprise*" 2>/dev/null | head -1)
+        # 查找 X-WRT R4S 固件（squashfs 和 ext4 两种，排除 enterprise 版）
+        find_r4s() {
+          find bin/targets/rockchip/armv8/ \
+            -name "*nanopi-r4s*$1*sysupgrade*.img*" \
+            ! -name "*enterprise*" 2>/dev/null | head -1
+        }
 
-        if [ -z "$XWRT_IMG" ]; then
-          XWRT_IMG=$(find bin/targets/rockchip/armv8/ \
-            -name "*nanopi-r4s*sysupgrade*.img*" \
-            ! -name "*enterprise*" 2>/dev/null | head -1)
-        fi
+        SQ_IMG=$(find_r4s squashfs)
+        EXT4_IMG=$(find_r4s ext4)
 
-        if [ -z "$XWRT_IMG" ]; then
+        if [ -z "$SQ_IMG" ] && [ -z "$EXT4_IMG" ]; then
           echo "未找到 R4S 固件文件"
           ls -la bin/targets/rockchip/armv8/ 2>/dev/null || true
           exit 1
         fi
 
-        # 如果是 .gz 压缩文件，先解压
-        if [[ "$XWRT_IMG" == *.gz ]]; then
-          gzip -dc "$XWRT_IMG" > "${XWRT_IMG%.gz}" || rc=$?
-          if [ "${rc:-0}" -ne 0 ] && [ "${rc:-0}" -ne 2 ]; then
-            echo "错误: X-WRT 固件解压失败 (gzip 退出码 ${rc:-0})"
-            exit 1
-          fi
-          rm -f "$XWRT_IMG"
-          XWRT_IMG="${XWRT_IMG%.gz}"
-        fi
-
         IMMWRT_IMG="../immwrt/immwrt-r4s.img"
-        OUT_IMG="${XWRT_IMG%.img}-ddr3.img"
 
-        echo "X-WRT 固件: $XWRT_IMG"
-        echo "输出固件:   $OUT_IMG"
+        for IMG in "$SQ_IMG" "$EXT4_IMG"; do
+          [ -n "$IMG" ] || continue
 
-        bash ../replace-uboot.sh "$XWRT_IMG" "$IMMWRT_IMG" "$OUT_IMG"
+          # 如果是 .gz 压缩文件，先解压
+          if [[ "$IMG" == *.gz ]]; then
+            gzip -dc "$IMG" > "${IMG%.gz}" || rc=$?
+            if [ "${rc:-0}" -ne 0 ] && [ "${rc:-0}" -ne 2 ]; then
+              echo "错误: X-WRT 固件解压失败 (gzip 退出码 ${rc:-0})"
+              exit 1
+            fi
+            rm -f "$IMG"
+            IMG="${IMG%.gz}"
+          fi
 
-        echo "XWRT_IMG=$OUT_IMG" > ../img_path.txt
-        echo "XWRT_IMG_FULL=$(pwd)/$OUT_IMG" >> ../img_path.txt
+          OUT_IMG="${IMG%.img}-ddr3.img"
+          echo "处理: $IMG -> $OUT_IMG"
+          bash ../replace-uboot.sh "$IMG" "$IMMWRT_IMG" "$OUT_IMG"
+          echo "$(pwd)/$OUT_IMG" >> ../firmware_paths.txt
+        done
+
+        echo "=== 输出固件列表 ==="
+        cat ../firmware_paths.txt
 
     # ============================================================
     # 第四步：打包上传
     # ============================================================
     - name: 压缩固件
       run: |
-        source img_path.txt
         OUTPUT_DIR="firmware"
         mkdir -p "$OUTPUT_DIR"
 
         VERSION_TAG=$(cat x-wrt/release.tag)
 
-        gzip -c "$XWRT_IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img.gz"
-        cp "$XWRT_IMG_FULL" "$OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img"
-        sha256sum "$XWRT_IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.sha256"
+        while IFS= read -r IMG_FULL; do
+          [ -n "$IMG_FULL" ] || continue
+          BASE=$(basename "$IMG_FULL")
+          VARIANT=$(echo "$BASE" | grep -oE '(squashfs|ext4)' | head -1)
+          [ -n "$VARIANT" ] || VARIANT="img"
+
+          gzip -c "$IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VARIANT}-${VERSION_TAG}.img.gz"
+          cp "$IMG_FULL" "$OUTPUT_DIR/xwrt-r4s-ddr3-${VARIANT}-${VERSION_TAG}.img"
+          sha256sum "$IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VARIANT}-${VERSION_TAG}.sha256"
+        done < firmware_paths.txt
 
         {
           echo 'X-WRT for NanoPi R4S DDR3 1GB'
@@ -259,16 +268,14 @@ jobs:
           echo ''
           echo 'Files'
           echo '-----'
-          echo "- $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img.gz : flash this file"
-          echo "- $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img     : raw image"
-          echo "- $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.sha256  : SHA256 checksum"
+          echo "- squashfs: xwrt-r4s-ddr3-squashfs-${VERSION_TAG}.img.gz"
+          echo "- ext4    : xwrt-r4s-ddr3-ext4-${VERSION_TAG}.img.gz"
           echo ''
           echo 'Flash'
           echo '-----'
           echo '1. Verify checksum:'
-          echo "   sha256sum -c $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.sha256"
-          echo '2. Write to SD card with balenaEtcher, or:'
-          echo "   gunzip -c $OUTPUT_DIR/xwrt-r4s-ddr3-${VERSION_TAG}.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync"
+          echo "   sha256sum -c xwrt-r4s-ddr3-<variant>-${VERSION_TAG}.sha256"
+          echo '2. Write the .img.gz to an SD card (balenaEtcher or dd)'
           echo '3. Boot on NanoPi R4S 1GB (DDR3)'
           echo '4. LuCI: http://192.168.15.1'
           echo ''
