@@ -63,7 +63,7 @@ jobs:
           libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf \
           automake libtool autopoint device-tree-compiler \
           python3 python3-pip python3-dev python3-setuptools python3-pyelftools swig \
-          clang llvm jq pahole
+          clang llvm jq pahole bc libdw-dev
         sudo -E apt-get -y autoremove --purge || true
         sudo -E apt-get clean
 
@@ -158,6 +158,13 @@ jobs:
         echo "dae 版本: $DAETAG"
         sed -i "s/PKG_VERSION:=stable/PKG_VERSION:=$DAETAG/" package/feeds/dae/dae/Makefile
         grep '^PKG_VERSION' package/feeds/dae/dae/Makefile
+
+    - name: 预编译 bpf-headers（快速诊断）
+      run: |
+        cd x-wrt
+        cp feeds/x/rom/lede/config.rockchip-armv8 .config
+        make defconfig
+        make package/kernel/bpf-headers/compile V=s -j1
 
     - name: 编译 X-WRT (rockchip-armv8)
       run: |
