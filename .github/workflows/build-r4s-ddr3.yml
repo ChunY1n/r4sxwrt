@@ -15,21 +15,56 @@ on:
   workflow_dispatch:
     inputs:
       xwrt_tag:
-        description: 'X-WRT 分支/标签 (master=26.04 开发版, 或稳定标签如 26.04_b202607300654)'
-        required: true
-        default: '26.04_b202607300654'
+        description: 'X-WRT 标签 (latest=自动取最新 26.04, 或指定如 26.04_b202607300654)'
+        required: false
+        default: 'latest'
       immwrt_tag:
         description: 'immortalwrt 版本 (snapshot=每日最新, 或稳定版如 25.12.1)'
         required: true
         default: '25.12.1'
-
-env:
-  XWRT_TAG: ${{ github.event.inputs.xwrt_tag || '26.04_b202607300654' }}
-  IMMWRT_TAG: ${{ github.event.inputs.immwrt_tag || '25.12.1' }}
+  schedule:
+    - cron: '0 2 * * 0'
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      xwrt_tag: ${{ steps.resolve.outputs.xwrt_tag }}
+      dae_ver: ${{ steps.resolve.outputs.dae_ver }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      skip: ${{ steps.resolve.outputs.skip }}
+    steps:
+      - name: 解析最新版本并检查是否已发布
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          INPUT_TAG="${{ github.event.inputs.xwrt_tag }}"
+          if [ -z "$INPUT_TAG" ] || [ "$INPUT_TAG" = "latest" ]; then
+            XWRT_TAG=$(curl -s https://api.github.com/repos/x-wrt/x-wrt/tags | jq -r '[.[].name] | map(select(startswith("26.04_b"))) | sort | last')
+          else
+            XWRT_TAG="$INPUT_TAG"
+          fi
+          DAE_VER=$(curl -s https://api.github.com/repos/daeuniverse/dae/releases/latest | jq -r .tag_name | tr -d 'v')
+          REL_TAG="xwrt-r4s-ddr3-v${XWRT_TAG}"
+          echo "xwrt_tag=$XWRT_TAG" >> "$GITHUB_OUTPUT"
+          echo "dae_ver=$DAE_VER" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$REL_TAG" >> "$GITHUB_OUTPUT"
+          if curl -fsI "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${REL_TAG}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      XWRT_TAG: ${{ needs.check.outputs.xwrt_tag }}
+      DAE_VER: ${{ needs.check.outputs.dae_ver }}
+      RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+      IMMWRT_TAG: ${{ github.event.inputs.immwrt_tag || '25.12.1' }}
 
     steps:
     - name: Checkout
@@ -63,7 +98,7 @@ jobs:
           libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf \
           automake libtool autopoint device-tree-compiler \
           python3 python3-pip python3-dev python3-setuptools python3-pyelftools swig \
-          clang llvm jq pahole bc libdw-dev
+          clang llvm jq pahole bc libdw-dev gh
         sudo -E apt-get -y autoremove --purge || true
         sudo -E apt-get clean
 
@@ -154,7 +189,7 @@ jobs:
         # luci-app-dae 界面（本仓库内置）
         cp -r ../packages/luci-app-dae package/luci-app-dae
         # 固定到 dae 最新发布版本（feed 默认值是占位符）
-        DAETAG=$(curl -s https://api.github.com/repos/daeuniverse/dae/releases/latest | jq -r .tag_name | tr -d 'v')
+        DAETAG="$DAE_VER"
         echo "dae 版本: $DAETAG"
         sed -i "s/PKG_VERSION:=stable/PKG_VERSION:=$DAETAG/" package/feeds/dae/dae/Makefile
         # dae 2.x 的 control/kern/tests 目录全是构建约束文件，go build ./... 会报错，
@@ -360,3 +395,21 @@ jobs:
         name: xwrt-r4s-ddr3-firmware
         path: firmware/
         retention-days: 30
+
+    - name: 发布到 GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        cd firmware
+        if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          echo "Release $RELEASE_TAG 已存在，覆盖资产"
+        else
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "X-WRT R4S DDR3 1GB Firmware v$XWRT_TAG" \
+            --notes "dae $DAE_VER · U-Boot immortalwrt $IMMWRT_TAG · 自动编译发布" \
+            *.img.gz *.sha256 README.txt || true
+        fi
+        gh release upload "$RELEASE_TAG" *.img.gz *.sha256 README.txt \
+          --repo "$GITHUB_REPOSITORY" --clobber
+        gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url --jq .url
