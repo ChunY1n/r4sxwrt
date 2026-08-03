@@ -4,7 +4,7 @@
 # 支持 DDR3 1GB 版本（rk3399_ddr_800MHz_v1.30.bin DDR 初始化，自动识别 DDR3/LPDDR4）
 #
 # 本版在原有基础上新增：
-# - 内核开启 BTF / BPF_EVENTS / KPROBE_EVENTS（dae CO-RE 必需）
+# - 内核开启完整 eBPF/BTF（BPF_SYSCALL / BPF_JIT / DEBUG_INFO_BTF / CGROUPS 等，dae/daed CO-RE 必需）
 # - 内置 daed / dae / luci-app-daede（kenzok8 源）
 # - 内核模块 kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy
 # - 编译产物附带全部 dae 相关 apk
@@ -41,12 +41,27 @@ jobs:
         run: |
           INPUT_TAG="${{ github.event.inputs.xwrt_tag }}"
           AUTH=(-H "Authorization: Bearer $GH_TOKEN")
+          resolve_api() {
+            local url="$1" jqexpr="$2" out="" i
+            for i in 1 2 3 4 5; do
+              out=$(curl -fsS --max-time 30 "${AUTH[@]}" "$url" 2>/dev/null | jq -r "$jqexpr" 2>/dev/null)
+              if [ -n "$out" ] && [ "$out" != "null" ]; then
+                echo "$out"
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
           if [ -z "$INPUT_TAG" ] || [ "$INPUT_TAG" = "latest" ]; then
-            XWRT_TAG=$(curl -s "${AUTH[@]}" https://api.github.com/repos/x-wrt/x-wrt/tags | jq -r '[.[].name] | map(select(startswith("26.04_b"))) | sort | last')
+            XWRT_TAG=$(resolve_api "https://api.github.com/repos/x-wrt/x-wrt/tags" '[.[].name] | map(select(startswith("26.04_b"))) | sort | last' || true)
           else
             XWRT_TAG="$INPUT_TAG"
           fi
-          DAE_VER=$(curl -s "${AUTH[@]}" https://api.github.com/repos/kenzok8/openwrt-daede/releases/latest | jq -r .tag_name)
+          DAE_VER=$(resolve_api "https://api.github.com/repos/kenzok8/openwrt-daede/releases/latest" '.tag_name' || true)
+          # 网络抖动时回退到已知可用版本，避免整个编译因解析失败而中止
+          [ -n "$XWRT_TAG" ] || XWRT_TAG="26.04_b202607300654"
+          [ -n "$DAE_VER" ] || DAE_VER="v2026.08.03"
           if [ -z "$XWRT_TAG" ] || [ -z "$DAE_VER" ]; then
             echo "错误: 解析最新版本失败 (xwrt=$XWRT_TAG, daede=$DAE_VER)"
             exit 1
@@ -249,11 +264,78 @@ jobs:
         CONFIG_PACKAGE_unzip=y
         CONFIG_PACKAGE_curl=y
         CONFIG_KERNEL_DEBUG_INFO=y
+        # CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set
         CONFIG_KERNEL_DEBUG_INFO_BTF=y
+        CONFIG_KERNEL_BPF_SYSCALL=y
         CONFIG_KERNEL_BPF_EVENTS=y
+        CONFIG_KERNEL_KPROBES=y
         CONFIG_KERNEL_KPROBE_EVENTS=y
+        CONFIG_KERNEL_CGROUPS=y
+        CONFIG_KERNEL_XDP_SOCKETS=y
         EOF
-        grep -E 'CONFIG_PACKAGE_dae=|CONFIG_KERNEL_DEBUG_INFO_BTF=' feeds/x/rom/lede/config.rockchip-armv8
+        # 关闭精简调试信息（BTF 生成要求非 reduced 模式）
+        sed -i 's/^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y/# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set/' feeds/x/rom/lede/config.rockchip-armv8
+
+        # ---- 直接修改内核 Kconfig 片段，确保 BPF/BTF 真正编进内核 ----
+        for KCFG in target/linux/generic/config-6.18 target/linux/rockchip/config-6.18; do
+          [ -f "$KCFG" ] || continue
+          sed -i \
+            -e 's/^# CONFIG_BPF_SYSCALL is not set$/CONFIG_BPF_SYSCALL=y/' \
+            -e 's/^# CONFIG_BPF_JIT is not set$/CONFIG_BPF_JIT=y/' \
+            -e 's/^# CONFIG_BPF_JIT_ALWAYS_ON is not set$/CONFIG_BPF_JIT_ALWAYS_ON=y/' \
+            -e 's/^# CONFIG_BPF_STREAM_PARSER is not set$/CONFIG_BPF_STREAM_PARSER=y/' \
+            -e 's/^# CONFIG_BPF_EVENTS is not set$/CONFIG_BPF_EVENTS=y/' \
+            -e 's/^# CONFIG_CGROUPS is not set$/CONFIG_CGROUPS=y/' \
+            -e 's/^# CONFIG_KPROBES is not set$/CONFIG_KPROBES=y/' \
+            -e 's/^# CONFIG_KPROBE_EVENTS is not set$/CONFIG_KPROBE_EVENTS=y/' \
+            -e 's/^# CONFIG_DEBUG_INFO is not set$/CONFIG_DEBUG_INFO=y/' \
+            -e 's/^# CONFIG_DEBUG_INFO_BTF is not set$/CONFIG_DEBUG_INFO_BTF=y/' \
+            -e 's/^# CONFIG_NET_INGRESS is not set$/CONFIG_NET_INGRESS=y/' \
+            -e 's/^# CONFIG_NET_EGRESS is not set$/CONFIG_NET_EGRESS=y/' \
+            -e 's/^# CONFIG_NET_SCH_INGRESS is not set$/CONFIG_NET_SCH_INGRESS=m/' \
+            -e 's/^# CONFIG_NET_CLS_BPF is not set$/CONFIG_NET_CLS_BPF=m/' \
+            -e 's/^# CONFIG_NET_ACT_BPF is not set$/CONFIG_NET_ACT_BPF=m/' \
+            -e 's/^# CONFIG_NET_CLS_ACT is not set$/CONFIG_NET_CLS_ACT=y/' \
+            -e 's/^# CONFIG_VETH is not set$/CONFIG_VETH=m/' \
+            -e 's/^# CONFIG_XDP_SOCKETS is not set$/CONFIG_XDP_SOCKETS=y/' \
+            -e 's/^# CONFIG_XDP_SOCKETS_DIAG is not set$/CONFIG_XDP_SOCKETS_DIAG=m/' \
+            "$KCFG"
+        done
+        # 片段中缺失的关键项也一并追加（重复项由 kconfig 合并，无害）
+        cat >> target/linux/generic/config-6.18 <<'EOF'
+        CONFIG_BPF_SYSCALL=y
+        CONFIG_BPF_JIT=y
+        CONFIG_BPF_JIT_ALWAYS_ON=y
+        CONFIG_BPF_STREAM_PARSER=y
+        CONFIG_BPF_EVENTS=y
+        CONFIG_CGROUPS=y
+        CONFIG_KPROBES=y
+        CONFIG_KPROBE_EVENTS=y
+        CONFIG_DEBUG_INFO=y
+        CONFIG_DEBUG_INFO_BTF=y
+        CONFIG_NET_INGRESS=y
+        CONFIG_NET_EGRESS=y
+        CONFIG_NET_SCH_INGRESS=m
+        CONFIG_NET_CLS_BPF=m
+        CONFIG_NET_ACT_BPF=m
+        CONFIG_NET_CLS_ACT=y
+        CONFIG_VETH=m
+        CONFIG_XDP_SOCKETS=y
+        CONFIG_XDP_SOCKETS_DIAG=m
+        EOF
+        grep -E 'CONFIG_PACKAGE_dae=|CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=' feeds/x/rom/lede/config.rockchip-armv8
+        grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS)=' target/linux/generic/config-6.18
+
+        # ---- 规范化 OpenWrt 配置（消除 out of sync，确保追加项生效）----
+        cp feeds/x/rom/lede/config.rockchip-armv8 .config
+        make defconfig
+        cp .config feeds/x/rom/lede/config.rockchip-armv8
+        echo "=== defconfig 后关键项 ==="
+        grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_BPF_EVENTS=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=|CONFIG_KERNEL_DEBUG_INFO_REDUCED' .config || true
+
+        # 根分区 256MB 装不下 dae + geoip/geosite 数据，调整到 1GB
+        sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' feeds/x/rom/lede/config.rockchip-armv8
+        grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
 
         # 根分区 256MB 装不下 dae + geoip/geosite 数据，调整到 1GB
         sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' feeds/x/rom/lede/config.rockchip-armv8
@@ -275,8 +357,15 @@ jobs:
     - name: 验证内核 BTF 与模块配置
       run: |
         cd x-wrt
-        echo "=== .config 关键项 ==="
-        grep -E 'CONFIG_DEBUG_INFO_BTF=|CONFIG_VETH=|CONFIG_NET_SCHED_BPF=|CONFIG_XDP_SOCKETS_DIAG=' .config || true
+        echo "=== OpenWrt .config 关键项 ==="
+        grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=' .config || true
+        echo "=== 内核 .config 关键项 ==="
+        KCFG=$(find build_dir -type f -name .config -path '*linux-6.18*' 2>/dev/null | head -1)
+        if [ -n "$KCFG" ]; then
+          grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS|VETH|NET_CLS_BPF|KPROBES|BPF_EVENTS)=' "$KCFG" || true
+        else
+          echo "未找到内核 .config"
+        fi
 
     # ============================================================
     # 第三步：替换 U-Boot 引导区
