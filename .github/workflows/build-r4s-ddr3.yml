@@ -157,7 +157,11 @@ jobs:
         DAETAG=$(curl -s https://api.github.com/repos/daeuniverse/dae/releases/latest | jq -r .tag_name | tr -d 'v')
         echo "dae 版本: $DAETAG"
         sed -i "s/PKG_VERSION:=stable/PKG_VERSION:=$DAETAG/" package/feeds/dae/dae/Makefile
+        # dae 2.x 的 control/kern/tests 目录全是构建约束文件，go build ./... 会报错，
+        # 用 GO_PKG_EXCLUDES 排除（kenzok8 打包源同款修复）
+        sed -i '/^GO_PKG:=/a GO_PKG_EXCLUDES:=control/kern/tests' package/feeds/dae/dae/Makefile
         grep '^PKG_VERSION' package/feeds/dae/dae/Makefile
+        grep '^GO_PKG' package/feeds/dae/dae/Makefile
 
     - name: 编译 X-WRT (rockchip-armv8)
       run: |
