@@ -164,8 +164,8 @@ jobs:
         cd x-wrt
         # X-WRT 缺少 USE_LLVM_* 配置项导致 clang 路径为 /invalid，
         # 这里直接改用系统 clang/llvm（工作流已安装 clang+llvm）
-        sed -i 's|^LLVM_PATH:=/invalid|LLVM_PATH:=$(dir $(shell command -v clang))|' include/bpf.mk
-        grep -n '^LLVM_PATH' include/bpf.mk
+        sed -i 's|LLVM_PATH:=/invalid|LLVM_PATH:=$(dir $(shell command -v clang))|' include/bpf.mk
+        grep -n 'LLVM_PATH:=' include/bpf.mk
         command -v clang && clang --version | head -1
         cp feeds/x/rom/lede/config.rockchip-armv8 .config
         make defconfig
