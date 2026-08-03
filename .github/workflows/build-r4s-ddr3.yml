@@ -40,12 +40,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           INPUT_TAG="${{ github.event.inputs.xwrt_tag }}"
+          AUTH=(-H "Authorization: Bearer $GH_TOKEN")
           if [ -z "$INPUT_TAG" ] || [ "$INPUT_TAG" = "latest" ]; then
-            XWRT_TAG=$(curl -s https://api.github.com/repos/x-wrt/x-wrt/tags | jq -r '[.[].name] | map(select(startswith("26.04_b"))) | sort | last')
+            XWRT_TAG=$(curl -s "${AUTH[@]}" https://api.github.com/repos/x-wrt/x-wrt/tags | jq -r '[.[].name] | map(select(startswith("26.04_b"))) | sort | last')
           else
             XWRT_TAG="$INPUT_TAG"
           fi
-          DAE_VER=$(curl -s https://api.github.com/repos/kenzok8/openwrt-daede/releases/latest | jq -r .tag_name)
+          DAE_VER=$(curl -s "${AUTH[@]}" https://api.github.com/repos/kenzok8/openwrt-daede/releases/latest | jq -r .tag_name)
+          if [ -z "$XWRT_TAG" ] || [ -z "$DAE_VER" ]; then
+            echo "错误: 解析最新版本失败 (xwrt=$XWRT_TAG, daede=$DAE_VER)"
+            exit 1
+          fi
           REL_TAG="xwrt-r4s-ddr3-v${XWRT_TAG}-${DAE_VER#v}"
           echo "xwrt_tag=$XWRT_TAG" >> "$GITHUB_OUTPUT"
           echo "dae_ver=$DAE_VER" >> "$GITHUB_OUTPUT"
