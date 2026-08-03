@@ -4,7 +4,7 @@
 
 ## 固件特点
 
--  **1G DDR3 版可正常启动**（U-Boot 自动识别内存）
+- 官方不支持的 **1G DDR3 版可正常启动**；2G LPDDR4 版同样可用（U-Boot 自动识别内存）
 - 系统与官方 X-WRT 一致：LuCI 界面、软件包、默认地址 `192.168.15.1`
 - 引导区使用 rkbin DDR 初始化，自动检测 DDR3 / LPDDR3 / LPDDR4
 - sysupgrade 升级不会覆盖引导区，1G 兼容性可长期保持
@@ -17,7 +17,6 @@
 - 内核 BTF（`/sys/kernel/btf/vmlinux`）、`BPF_EVENTS`、`KPROBE_EVENTS`
 - `kmod-sched-bpf`、`kmod-veth`、`kmod-xdp-sockets-diag`、`kmod-sched-core`、`kmod-nft-tproxy`
 - `dae`、`luci-app-dae`、`dae-geoip`、`dae-geosite`
-- 编译产物额外包含全部 dae 相关 apk（在 `apks/` 目录），可单独安装/更新
 
 ## 下载与刷写
 
