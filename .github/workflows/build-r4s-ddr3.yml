@@ -216,6 +216,8 @@ jobs:
         CONFIG_PACKAGE_v2ray-geoip=y
         CONFIG_PACKAGE_v2ray-geosite=y
         CONFIG_PACKAGE_ca-bundle=y
+        CONFIG_PACKAGE_unzip=y
+        CONFIG_PACKAGE_curl=y
         CONFIG_KERNEL_DEBUG_INFO=y
         CONFIG_KERNEL_DEBUG_INFO_BTF=y
         CONFIG_KERNEL_BPF_EVENTS=y
