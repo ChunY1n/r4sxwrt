@@ -160,6 +160,8 @@ jobs:
         # dae 2.x 的 control/kern/tests 目录全是构建约束文件，go build ./... 会报错，
         # 用 GO_PKG_EXCLUDES 排除（kenzok8 打包源同款修复）
         sed -i '/^GO_PKG:=/a GO_PKG_EXCLUDES:=control/kern/tests' package/feeds/dae/dae/Makefile
+        # 去掉 Go 符号表，缩小 dae 二进制（kenzok8 打包源同款）
+        sed -i '/^GO_PKG_LDFLAGS_X:=/i GO_PKG_LDFLAGS:=-s -w' package/feeds/dae/dae/Makefile
         grep '^PKG_VERSION' package/feeds/dae/dae/Makefile
         grep '^GO_PKG' package/feeds/dae/dae/Makefile
 
@@ -224,6 +226,10 @@ jobs:
         CONFIG_KERNEL_KPROBE_EVENTS=y
         EOF
         grep -E 'CONFIG_PACKAGE_dae=|CONFIG_KERNEL_DEBUG_INFO_BTF=' feeds/x/rom/lede/config.rockchip-armv8
+
+        # 根分区 256MB 装不下 dae + geoip/geosite 数据，调整到 1GB
+        sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' feeds/x/rom/lede/config.rockchip-armv8
+        grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
 
         echo "=== 编译前磁盘空间 ==="
         df -h .
