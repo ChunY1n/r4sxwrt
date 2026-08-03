@@ -159,22 +159,15 @@ jobs:
         sed -i "s/PKG_VERSION:=stable/PKG_VERSION:=$DAETAG/" package/feeds/dae/dae/Makefile
         grep '^PKG_VERSION' package/feeds/dae/dae/Makefile
 
-    - name: 预编译 bpf-headers（快速诊断）
+    - name: 编译 X-WRT (rockchip-armv8)
       run: |
         cd x-wrt
-        # X-WRT 缺少 USE_LLVM_* 配置项导致 clang 路径为 /invalid，
+
+        # X-WRT 缺少 USE_LLVM_* 配置项导致 bpf.mk 找不到 clang，
         # 这里直接改用系统 clang/llvm（工作流已安装 clang+llvm）
         sed -i 's|LLVM_PATH:=/invalid|LLVM_PATH:=$(dir $(shell command -v clang))|' include/bpf.mk
         grep -n 'LLVM_PATH:=' include/bpf.mk
         command -v clang && clang --version | head -1
-        cp feeds/x/rom/lede/config.rockchip-armv8 .config
-        make defconfig
-        make tools/compile toolchain/compile -j$(nproc)
-        make package/kernel/bpf-headers/compile V=s -j$(nproc)
-
-    - name: 编译 X-WRT (rockchip-armv8)
-      run: |
-        cd x-wrt
 
         cp ../build.sh .
         cp ../upload.sh .
