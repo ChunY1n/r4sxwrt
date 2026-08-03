@@ -16,7 +16,7 @@
 
 - 内核 BTF（`/sys/kernel/btf/vmlinux`）、`BPF_EVENTS`、`KPROBE_EVENTS`
 - `kmod-sched-bpf`、`kmod-veth`、`kmod-xdp-sockets-diag`、`kmod-sched-core`、`kmod-nft-tproxy`
-- `dae`、`luci-app-dae`、`dae-geoip`、`dae-geosite`
+- `daed`（官方 Web 面板）、`dae`、`luci-app-daede`（kenzok8 源，与 dae 2.x 配套）
 
 ## 下载与刷写
 
