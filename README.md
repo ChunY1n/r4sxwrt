@@ -26,7 +26,12 @@
 
 打开 Actions → **Build X-WRT R4S DDR3 (with dae)** → Run workflow，可指定：
 
-- X-WRT 标签（默认最新 `26.04_b202607300654`）
+- X-WRT 标签（默认 `latest` = 自动取最新 26.04 标签，也可以手动指定）
 - immortalwrt 版本（默认 `25.12.1`，用于提取 DDR3 兼容 U-Boot）
 
 编译约需 2~3 小时，完成后在运行页面下载 `xwrt-r4s-ddr3-firmware` 工件。
+
+## 自动发布
+
+- 编译成功后会**自动发布到 GitHub Releases**（tag 命名 `xwrt-r4s-ddr3-v<版本>`）
+- 每周日 02:00（UTC）自动检查 X-WRT 最新标签和 dae 最新版本；若对应版本已发布则自动跳过，不重复编译
