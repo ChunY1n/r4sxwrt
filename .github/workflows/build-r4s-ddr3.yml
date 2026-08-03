@@ -5,7 +5,7 @@
 #
 # 本版在原有基础上新增：
 # - 内核开启 BTF / BPF_EVENTS / KPROBE_EVENTS（dae CO-RE 必需）
-# - 内置 dae、luci-app-dae、dae-geoip、dae-geosite
+# - 内置 daed / dae / luci-app-daede（kenzok8 源）
 # - 内核模块 kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy
 # - 编译产物附带全部 dae 相关 apk
 
@@ -45,8 +45,8 @@ jobs:
           else
             XWRT_TAG="$INPUT_TAG"
           fi
-          DAE_VER=$(curl -s https://api.github.com/repos/daeuniverse/dae/releases/latest | jq -r .tag_name | tr -d 'v')
-          REL_TAG="xwrt-r4s-ddr3-v${XWRT_TAG}"
+          DAE_VER=$(curl -s https://api.github.com/repos/kenzok8/openwrt-daede/releases/latest | jq -r .tag_name)
+          REL_TAG="xwrt-r4s-ddr3-v${XWRT_TAG}-${DAE_VER#v}"
           echo "xwrt_tag=$XWRT_TAG" >> "$GITHUB_OUTPUT"
           echo "dae_ver=$DAE_VER" >> "$GITHUB_OUTPUT"
           echo "release_tag=$REL_TAG" >> "$GITHUB_OUTPUT"
@@ -179,24 +179,14 @@ jobs:
     - name: 安装 feeds
       run: cd x-wrt && ./scripts/feeds install -a
 
-    - name: 添加 dae 软件源与界面包
+    - name: 添加 dae/daed 软件源
       run: |
         cd x-wrt
-        # dae / dae-geoip / dae-geosite 来自社区打包源
-        echo 'src-git dae https://github.com/douglarek/dae-openwrt.git' >> feeds.conf.default
-        ./scripts/feeds update dae
+        # dae / daed / luci-app-daede 来自 kenzok8 维护源（与 dae 2.x 配套）
+        echo 'src-git daede https://github.com/kenzok8/openwrt-daede.git' >> feeds.conf.default
+        ./scripts/feeds update daede
         ./scripts/feeds install -a
-        # luci-app-dae 界面（本仓库内置）
-        cp -r ../packages/luci-app-dae package/luci-app-dae
-        # 固定到 dae 最新发布版本（feed 默认值是占位符）
-        DAETAG="$DAE_VER"
-        echo "dae 版本: $DAETAG"
-        sed -i "s/PKG_VERSION:=stable/PKG_VERSION:=$DAETAG/" package/feeds/dae/dae/Makefile
-        # dae 2.x 的 control/kern/tests 目录全是构建约束文件，go build ./... 会报错，
-        # 用 GO_PKG_EXCLUDES 排除（kenzok8 打包源同款修复）
-        sed -i '/^GO_PKG:=/a GO_PKG_EXCLUDES:=control/kern/tests' package/feeds/dae/dae/Makefile
-        grep '^PKG_VERSION' package/feeds/dae/dae/Makefile
-        grep '^GO_PKG' package/feeds/dae/dae/Makefile
+        ls package/feeds/daede/
 
     - name: 编译 X-WRT (rockchip-armv8)
       run: |
@@ -239,10 +229,10 @@ jobs:
 
         # ---- dae / BTF 相关配置 ----
         cat >> feeds/x/rom/lede/config.rockchip-armv8 <<'EOF'
-        CONFIG_PACKAGE_luci-app-dae=y
+        CONFIG_PACKAGE_luci-app-daede=y
+        CONFIG_PACKAGE_luci-app-daede_daed=y
+        CONFIG_PACKAGE_daed=y
         CONFIG_PACKAGE_dae=y
-        CONFIG_PACKAGE_dae-geoip=y
-        CONFIG_PACKAGE_dae-geosite=y
         CONFIG_PACKAGE_kmod-sched-core=y
         CONFIG_PACKAGE_kmod-sched-bpf=y
         CONFIG_PACKAGE_kmod-veth=y
@@ -363,7 +353,7 @@ jobs:
           echo 'Includes'
           echo '--------'
           echo '- Kernel BTF (CONFIG_DEBUG_INFO_BTF) for dae CO-RE'
-          echo '- dae / luci-app-dae / dae-geoip / dae-geosite'
+          echo '- daed / luci-app-daede (kenzok8 feed)'
           echo '- kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy'
           echo ''
           echo 'Files'
@@ -406,8 +396,8 @@ jobs:
         else
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "X-WRT R4S DDR3 1GB Firmware v$XWRT_TAG" \
-            --notes "dae $DAE_VER · U-Boot immortalwrt $IMMWRT_TAG · 自动编译发布" \
+            --title "X-WRT R4S DDR3 1GB Firmware v$XWRT_TAG (daed $DAE_VER)" \
+            --notes "daed/daede feed $DAE_VER · U-Boot immortalwrt $IMMWRT_TAG" \
             *.img.gz *.sha256 README.txt || true
         fi
         gh release upload "$RELEASE_TAG" *.img.gz *.sha256 README.txt \
