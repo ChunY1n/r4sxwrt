@@ -331,7 +331,6 @@ jobs:
           echo '-----'
           echo "- squashfs: xwrt-r4s-ddr3-squashfs-${VERSION_TAG}.img.gz"
           echo "- ext4    : xwrt-r4s-ddr3-ext4-${VERSION_TAG}.img.gz"
-          echo '- apks/   : dae 相关独立软件包'
           echo ''
           echo 'Flash'
           echo '-----'
@@ -350,15 +349,6 @@ jobs:
         } > "$OUTPUT_DIR/README.txt"
 
         ls -lh "$OUTPUT_DIR/"
-
-    - name: 收集 dae 相关 apk
-      run: |
-        cd x-wrt
-        mkdir -p ../firmware/apks
-        find bin/packages -name '*.apk' | grep -E '/(dae|luci-app-dae|kmod-(sched-core|sched-bpf|veth|xdp-sockets-diag)|v2ray-geo)' \
-          | xargs -r -I{} cp {} ../firmware/apks/
-        echo "=== apk 列表 ==="
-        ls -lh ../firmware/apks/
 
     - name: 上传固件
       uses: actions/upload-artifact@v4
