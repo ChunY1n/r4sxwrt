@@ -1,15 +1,19 @@
-# GitHub Actions 工作流：编译 X-WRT 固件 for NanoPi R4S DDR3 1GB（内置 dae）
+# GitHub Actions 工作流：编译 X-WRT 固件 for NanoPi R4S DDR3 1GB
 #
 # 原理：编译 X-WRT 标准固件后，用 immortalwrt 的 U-Boot 引导区替换，
 # 支持 DDR3 1GB 版本（rk3399_ddr_800MHz_v1.30.bin DDR 初始化，自动识别 DDR3/LPDDR4）
 #
-# 本版在原有基础上新增：
-# - 内核开启完整 eBPF/BTF（BPF_SYSCALL / BPF_JIT / DEBUG_INFO_BTF / CGROUPS 等，dae/daed CO-RE 必需）
-# - 内置 daed / dae / luci-app-daede（kenzok8 源）
-# - 内核模块 kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy
-# - 编译产物附带全部 dae 相关 apk
+# 一次并行编译三个版本：
+#   1. dae       : 官方配置 + dae/daed（luci-app-daede）+ natcap，分区 512MB 系统 / 1024MB 软件
+#   2. dae-nonatcap : 同上但移除 natcap（无远程管理/一键VPN/全锥形NAT）
+#   3. official  : 完全官方（无 dae、保留 natcap、官方 256MB 系统分区、官方默认配置）
+#
+# 三个版本都包含：
+# - 内核完整 eBPF/BTF（仅 dae 两个版本；官方版保持原样）
+# - 只生成 R4S 设备镜像（不影响固件内容，仅缩短编译时间）
+# - immortalwrt DDR3 U-Boot 引导区
 
-name: Build X-WRT R4S DDR3 (with dae)
+name: Build X-WRT R4S DDR3 (dae / nonatcap / official)
 
 on:
   workflow_dispatch:
@@ -31,8 +35,9 @@ jobs:
     outputs:
       xwrt_tag: ${{ steps.resolve.outputs.xwrt_tag }}
       dae_ver: ${{ steps.resolve.outputs.dae_ver }}
-      release_tag: ${{ steps.resolve.outputs.release_tag }}
-      skip: ${{ steps.resolve.outputs.skip }}
+      skip_dae: ${{ steps.resolve.outputs.skip_dae }}
+      skip_dae_nonatcap: ${{ steps.resolve.outputs.skip_dae_nonatcap }}
+      skip_official: ${{ steps.resolve.outputs.skip_official }}
     steps:
       - name: 解析最新版本并检查是否已发布
         id: resolve
@@ -66,29 +71,67 @@ jobs:
             echo "错误: 解析最新版本失败 (xwrt=$XWRT_TAG, daede=$DAE_VER)"
             exit 1
           fi
-          REL_TAG="xwrt-r4s-ddr3-v${XWRT_TAG}-${DAE_VER#v}"
           echo "xwrt_tag=$XWRT_TAG" >> "$GITHUB_OUTPUT"
           echo "dae_ver=$DAE_VER" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$REL_TAG" >> "$GITHUB_OUTPUT"
-          if curl -fsI "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${REL_TAG}" >/dev/null 2>&1; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
+
+          DEFAULT_REL="xwrt-r4s-ddr3-v${XWRT_TAG}-${DAE_VER#v}"
+          NONATCAP_REL="xwrt-r4s-ddr3-nonatcap-v${XWRT_TAG}-${DAE_VER#v}"
+          OFFICIAL_REL="xwrt-r4s-ddr3-official-v${XWRT_TAG}"
+          check_release() {
+            local key="$1" tag="$2"
+            if curl -fsI "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" >/dev/null 2>&1; then
+              echo "skip_${key}=true" >> "$GITHUB_OUTPUT"
+              echo "已存在，跳过: $tag"
+            else
+              echo "需要编译: $tag"
+            fi
+          }
+          check_release dae "$DEFAULT_REL"
+          check_release dae_nonatcap "$NONATCAP_REL"
+          check_release official "$OFFICIAL_REL"
 
   build:
     needs: check
-    if: needs.check.outputs.skip != 'true'
+    if: |
+      (matrix.variant.id == 'dae' && needs.check.outputs.skip_dae != 'true') ||
+      (matrix.variant.id == 'dae-nonatcap' && needs.check.outputs.skip_dae_nonatcap != 'true') ||
+      (matrix.variant.id == 'official' && needs.check.outputs.skip_official != 'true')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - id: dae
+            suffix: ''
+            label: dae+natcap
+          - id: dae-nonatcap
+            suffix: '-nonatcap'
+            label: dae无natcap
+          - id: official
+            suffix: '-official'
+            label: 官方原版
     env:
       XWRT_TAG: ${{ needs.check.outputs.xwrt_tag }}
       DAE_VER: ${{ needs.check.outputs.dae_ver }}
-      RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
       IMMWRT_TAG: ${{ github.event.inputs.immwrt_tag || '25.12.1' }}
+      VARIANT: ${{ matrix.variant.id }}
+      SUFFIX: ${{ matrix.variant.suffix }}
+      LABEL: ${{ matrix.variant.label }}
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+
+    - name: 计算发布标签
+      run: |
+        if [ "$VARIANT" = "official" ]; then
+          echo "RELEASE_TAG=xwrt-r4s-ddr3-official-v${XWRT_TAG}" >> "$GITHUB_ENV"
+        else
+          echo "RELEASE_TAG=xwrt-r4s-ddr3${SUFFIX}-v${XWRT_TAG}-${DAE_VER#v}" >> "$GITHUB_ENV"
+        fi
+        echo "变体=$LABEL 标签=$RELEASE_TAG"
 
     # ============================================================
     # 环境准备：安装依赖 + 清理磁盘空间
@@ -200,6 +243,7 @@ jobs:
       run: cd x-wrt && ./scripts/feeds install -a
 
     - name: 添加 dae/daed 软件源
+      if: matrix.variant.id != 'official'
       run: |
         cd x-wrt
         # dae / daed / luci-app-daede 来自 kenzok8 维护源（与 dae 2.x 配套）
@@ -212,11 +256,13 @@ jobs:
       run: |
         cd x-wrt
 
-        # X-WRT 缺少 USE_LLVM_* 配置项导致 bpf.mk 找不到 clang，
-        # 这里直接改用系统 clang/llvm（工作流已安装 clang+llvm）
-        sed -i 's|LLVM_PATH:=/invalid|LLVM_PATH:=$(dir $(shell command -v clang))|' include/bpf.mk
-        grep -n 'LLVM_PATH:=' include/bpf.mk
-        command -v clang && clang --version | head -1
+        if [ "$VARIANT" != "official" ]; then
+          # X-WRT 缺少 USE_LLVM_* 配置项导致 bpf.mk 找不到 clang，
+          # 这里直接改用系统 clang/llvm（工作流已安装 clang+llvm）
+          sed -i 's|LLVM_PATH:=/invalid|LLVM_PATH:=$(dir $(shell command -v clang))|' include/bpf.mk
+          grep -n 'LLVM_PATH:=' include/bpf.mk
+          command -v clang && clang --version | head -1
+        fi
 
         cp ../build.sh .
         cp ../upload.sh .
@@ -226,7 +272,7 @@ jobs:
         else
           echo "$XWRT_TAG" > release.tag
         fi
-        echo "版本标签: $(cat release.tag)"
+        echo "版本标签: $(cat release.tag) 变体: $LABEL"
 
         if [ -f feeds/x/rom/lede/cfg.list ]; then
           echo "=== cfg.list 中的 rockchip 配置 ==="
@@ -241,14 +287,15 @@ jobs:
           echo "警告: config.rockchip-armv8 不存在"
         fi
 
-        # 只保留 NanoPi R4S 设备，大幅缩短编译时间和磁盘占用
+        # 只保留 NanoPi R4S 设备，大幅缩短编译时间和磁盘占用（所有变体）
         sed -i -E 's/^(CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_.*)=y/# \1 is not set/' feeds/x/rom/lede/config.rockchip-armv8
         echo 'CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r4s=y' >> feeds/x/rom/lede/config.rockchip-armv8
         grep -q 'CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r4s=y' feeds/x/rom/lede/config.rockchip-armv8 || {
           echo "错误: R4S 设备配置未生效"; exit 1; }
 
-        # ---- dae / BTF 相关配置 ----
-        cat >> feeds/x/rom/lede/config.rockchip-armv8 <<'EOF'
+        if [ "$VARIANT" != "official" ]; then
+          # ---- dae / BTF 相关配置 ----
+          cat >> feeds/x/rom/lede/config.rockchip-armv8 <<'EOF'
         CONFIG_PACKAGE_luci-app-daede=y
         CONFIG_PACKAGE_luci-app-daede_daed=y
         CONFIG_PACKAGE_daed=y
@@ -279,62 +326,72 @@ jobs:
         # 但它在 GitHub Actions 的主机 gcc 下无法编译）
         # CONFIG_PACKAGE_kselftests-bpf is not set
         EOF
-        # 关闭精简调试信息（BTF 生成要求非 reduced 模式）
-        sed -i 's/^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y/# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set/' feeds/x/rom/lede/config.rockchip-armv8
-        # 确保 kselftests-bpf 显式不选
-        sed -i '/^CONFIG_PACKAGE_kselftests-bpf=/d' feeds/x/rom/lede/config.rockchip-armv8
-        echo '# CONFIG_PACKAGE_kselftests-bpf is not set' >> feeds/x/rom/lede/config.rockchip-armv8
+          # 关闭精简调试信息（BTF 生成要求非 reduced 模式）
+          sed -i 's/^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y/# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set/' feeds/x/rom/lede/config.rockchip-armv8
+          # 确保 kselftests-bpf 显式不选
+          sed -i '/^CONFIG_PACKAGE_kselftests-bpf=/d' feeds/x/rom/lede/config.rockchip-armv8
+          echo '# CONFIG_PACKAGE_kselftests-bpf is not set' >> feeds/x/rom/lede/config.rockchip-armv8
 
-        # ---- 修复官方 URL 日志页 ACL bug ----
-        # cgi-io 执行前会把 /bin/cat（busybox 软链接）解析为 /bin/busybox 再匹配 ACL，
-        # 官方只授权了 /bin/cat /tmp/url.log，导致页面报 "Access to command denied by ACL"
-        ACL_JSON=feeds/x/luci-app-natflow-users/root/usr/share/rpcd/acl.d/luci-app-natflow-users.json
-        if [ -f "$ACL_JSON" ]; then
-          grep -q '"/bin/busybox /tmp/url.log"' "$ACL_JSON" || \
-            sed -i 's|"/bin/cat /tmp/url.log": \[ "exec" \]|"/bin/cat /tmp/url.log": [ "exec" ],\n\t\t\t\t"/bin/busybox /tmp/url.log": [ "exec" ]|' "$ACL_JSON"
-          grep -n 'url.log' "$ACL_JSON"
-        else
-          echo "警告: 未找到 luci-app-natflow-users ACL 文件"
-        fi
-        # 页面 JS 还会拿到 stat 解析后的 /bin/busybox 路径并直接执行，
-        # busybox 会把日志文件名当作命令名，导致页面空白；这里固定用 /bin/cat
-        URLLOG_JS=feeds/x/luci-app-natflow-users/htdocs/luci-static/resources/view/status/urllog.js
-        if [ -f "$URLLOG_JS" ]; then
-          sed -i 's|var logger = stat\[0\] ? stat\[0\].path : null;|var logger = "/bin/cat";|' "$URLLOG_JS"
-          grep -n 'logger' "$URLLOG_JS"
-        else
-          echo "警告: 未找到 urllog.js"
-        fi
+          # dae 无 natcap 变体：显式关闭 natcap 全家桶
+          if [ "$VARIANT" = "dae-nonatcap" ]; then
+            sed -i -E 's/^(CONFIG_PACKAGE_(natcapd|natcapd-client|natcapd-server))=(y|m)/# \1 is not set/' feeds/x/rom/lede/config.rockchip-armv8
+            cat >> feeds/x/rom/lede/config.rockchip-armv8 <<'EOF'
+        # CONFIG_PACKAGE_luci-app-natcap is not set
+        # CONFIG_PACKAGE_kmod-natcap is not set
+        EOF
+            grep -E '^CONFIG_PACKAGE_natcap|^# CONFIG_PACKAGE_(luci-app-natcap|kmod-natcap)' feeds/x/rom/lede/config.rockchip-armv8 || true
+          fi
 
-        # ---- 直接修改内核 Kconfig 片段，确保 BPF/BTF 真正编进内核 ----
-        for KCFG in target/linux/generic/config-6.18 target/linux/rockchip/config-6.18 target/linux/rockchip/armv8/config-6.18; do
-          [ -f "$KCFG" ] || continue
-          sed -i \
-            -e 's/^# CONFIG_BPF_SYSCALL is not set$/CONFIG_BPF_SYSCALL=y/' \
-            -e 's/^# CONFIG_BPF_JIT is not set$/CONFIG_BPF_JIT=y/' \
-            -e 's/^# CONFIG_BPF_JIT_ALWAYS_ON is not set$/CONFIG_BPF_JIT_ALWAYS_ON=y/' \
-            -e 's/^# CONFIG_BPF_STREAM_PARSER is not set$/CONFIG_BPF_STREAM_PARSER=y/' \
-            -e 's/^# CONFIG_BPF_EVENTS is not set$/CONFIG_BPF_EVENTS=y/' \
-            -e 's/^# CONFIG_CGROUPS is not set$/CONFIG_CGROUPS=y/' \
-            -e 's/^# CONFIG_KPROBES is not set$/CONFIG_KPROBES=y/' \
-            -e 's/^# CONFIG_KPROBE_EVENTS is not set$/CONFIG_KPROBE_EVENTS=y/' \
-            -e 's/^# CONFIG_NAMESPACES is not set$/CONFIG_NAMESPACES=y/' \
-            -e 's/^# CONFIG_IPV6_MULTIPLE_TABLES is not set$/CONFIG_IPV6_MULTIPLE_TABLES=y/' \
-            -e 's/^# CONFIG_DEBUG_INFO is not set$/CONFIG_DEBUG_INFO=y/' \
-            -e 's/^# CONFIG_DEBUG_INFO_BTF is not set$/CONFIG_DEBUG_INFO_BTF=y/' \
-            -e 's/^# CONFIG_NET_INGRESS is not set$/CONFIG_NET_INGRESS=y/' \
-            -e 's/^# CONFIG_NET_EGRESS is not set$/CONFIG_NET_EGRESS=y/' \
-            -e 's/^# CONFIG_NET_SCH_INGRESS is not set$/CONFIG_NET_SCH_INGRESS=m/' \
-            -e 's/^# CONFIG_NET_CLS_BPF is not set$/CONFIG_NET_CLS_BPF=m/' \
-            -e 's/^# CONFIG_NET_ACT_BPF is not set$/CONFIG_NET_ACT_BPF=m/' \
-            -e 's/^# CONFIG_NET_CLS_ACT is not set$/CONFIG_NET_CLS_ACT=y/' \
-            -e 's/^# CONFIG_VETH is not set$/CONFIG_VETH=m/' \
-            -e 's/^# CONFIG_XDP_SOCKETS is not set$/CONFIG_XDP_SOCKETS=y/' \
-            -e 's/^# CONFIG_XDP_SOCKETS_DIAG is not set$/CONFIG_XDP_SOCKETS_DIAG=m/' \
-            "$KCFG"
-        done
-        # 片段中缺失的关键项也一并追加（重复项由 kconfig 合并，无害）
-        cat >> target/linux/generic/config-6.18 <<'EOF'
+          # ---- 修复官方 URL 日志页 ACL bug ----
+          # cgi-io 执行前会把 /bin/cat（busybox 软链接）解析为 /bin/busybox 再匹配 ACL，
+          # 官方只授权了 /bin/cat /tmp/url.log，导致页面报 "Access to command denied by ACL"
+          ACL_JSON=feeds/x/luci-app-natflow-users/root/usr/share/rpcd/acl.d/luci-app-natflow-users.json
+          if [ -f "$ACL_JSON" ]; then
+            grep -q '"/bin/busybox /tmp/url.log"' "$ACL_JSON" || \
+              sed -i 's|"/bin/cat /tmp/url.log": \[ "exec" \]|"/bin/cat /tmp/url.log": [ "exec" ],\n\t\t\t\t"/bin/busybox /tmp/url.log": [ "exec" ]|' "$ACL_JSON"
+            grep -n 'url.log' "$ACL_JSON"
+          else
+            echo "警告: 未找到 luci-app-natflow-users ACL 文件"
+          fi
+          # 页面 JS 还会拿到 stat 解析后的 /bin/busybox 路径并直接执行，
+          # busybox 会把日志文件名当作命令名，导致页面空白；这里固定用 /bin/cat
+          URLLOG_JS=feeds/x/luci-app-natflow-users/htdocs/luci-static/resources/view/status/urllog.js
+          if [ -f "$URLLOG_JS" ]; then
+            sed -i 's|var logger = stat\[0\] ? stat\[0\].path : null;|var logger = "/bin/cat";|' "$URLLOG_JS"
+            grep -n 'logger' "$URLLOG_JS"
+          else
+            echo "警告: 未找到 urllog.js"
+          fi
+
+          # ---- 直接修改内核 Kconfig 片段，确保 BPF/BTF 真正编进内核 ----
+          for KCFG in target/linux/generic/config-6.18 target/linux/rockchip/config-6.18 target/linux/rockchip/armv8/config-6.18; do
+            [ -f "$KCFG" ] || continue
+            sed -i \
+              -e 's/^# CONFIG_BPF_SYSCALL is not set$/CONFIG_BPF_SYSCALL=y/' \
+              -e 's/^# CONFIG_BPF_JIT is not set$/CONFIG_BPF_JIT=y/' \
+              -e 's/^# CONFIG_BPF_JIT_ALWAYS_ON is not set$/CONFIG_BPF_JIT_ALWAYS_ON=y/' \
+              -e 's/^# CONFIG_BPF_STREAM_PARSER is not set$/CONFIG_BPF_STREAM_PARSER=y/' \
+              -e 's/^# CONFIG_BPF_EVENTS is not set$/CONFIG_BPF_EVENTS=y/' \
+              -e 's/^# CONFIG_CGROUPS is not set$/CONFIG_CGROUPS=y/' \
+              -e 's/^# CONFIG_KPROBES is not set$/CONFIG_KPROBES=y/' \
+              -e 's/^# CONFIG_KPROBE_EVENTS is not set$/CONFIG_KPROBE_EVENTS=y/' \
+              -e 's/^# CONFIG_NAMESPACES is not set$/CONFIG_NAMESPACES=y/' \
+              -e 's/^# CONFIG_IPV6_MULTIPLE_TABLES is not set$/CONFIG_IPV6_MULTIPLE_TABLES=y/' \
+              -e 's/^# CONFIG_DEBUG_INFO is not set$/CONFIG_DEBUG_INFO=y/' \
+              -e 's/^# CONFIG_DEBUG_INFO_BTF is not set$/CONFIG_DEBUG_INFO_BTF=y/' \
+              -e 's/^# CONFIG_NET_INGRESS is not set$/CONFIG_NET_INGRESS=y/' \
+              -e 's/^# CONFIG_NET_EGRESS is not set$/CONFIG_NET_EGRESS=y/' \
+              -e 's/^# CONFIG_NET_SCH_INGRESS is not set$/CONFIG_NET_SCH_INGRESS=m/' \
+              -e 's/^# CONFIG_NET_CLS_BPF is not set$/CONFIG_NET_CLS_BPF=m/' \
+              -e 's/^# CONFIG_NET_ACT_BPF is not set$/CONFIG_NET_ACT_BPF=m/' \
+              -e 's/^# CONFIG_NET_CLS_ACT is not set$/CONFIG_NET_CLS_ACT=y/' \
+              -e 's/^# CONFIG_VETH is not set$/CONFIG_VETH=m/' \
+              -e 's/^# CONFIG_XDP_SOCKETS is not set$/CONFIG_XDP_SOCKETS=y/' \
+              -e 's/^# CONFIG_XDP_SOCKETS_DIAG is not set$/CONFIG_XDP_SOCKETS_DIAG=m/' \
+              "$KCFG"
+          done
+          # 片段中缺失的关键项也一并追加（重复项由 kconfig 合并，无害）
+          cat >> target/linux/generic/config-6.18 <<'EOF'
         CONFIG_BPF_SYSCALL=y
         CONFIG_BPF_JIT=y
         CONFIG_BPF_JIT_ALWAYS_ON=y
@@ -358,42 +415,52 @@ jobs:
         CONFIG_XDP_SOCKETS=y
         CONFIG_XDP_SOCKETS_DIAG=m
         EOF
-        grep -E 'CONFIG_PACKAGE_dae=|CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=' feeds/x/rom/lede/config.rockchip-armv8
-        grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS)=' target/linux/generic/config-6.18
+          grep -E 'CONFIG_PACKAGE_dae=|CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=' feeds/x/rom/lede/config.rockchip-armv8
+          grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS)=' target/linux/generic/config-6.18
 
-        # 只读系统分区 512MB（系统实际占用约 330MB，够用）；
-        # 软件分区（overlay）由 X-WRT 首次开机自动创建，下面把默认值改为 1024MB
-        sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=512/' feeds/x/rom/lede/config.rockchip-armv8
-        grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
-        sed -i 's/overlay_size=\$((1\*512))/overlay_size=\$((1*1024))/' feeds/x/base-config-setting/files/disk_ready.preinit
-        grep -qF 'overlay_size=$((1*1024))' feeds/x/base-config-setting/files/disk_ready.preinit || {
-          echo "错误: overlay 默认大小修改失败"; exit 1; }
+          # 只读系统分区 512MB（系统实际占用约 330MB，够用）；
+          # 软件分区（overlay）由 X-WRT 首次开机自动创建，下面把默认值改为 1024MB
+          sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=512/' feeds/x/rom/lede/config.rockchip-armv8
+          grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
+          sed -i 's/overlay_size=\$((1\*512))/overlay_size=\$((1*1024))/' feeds/x/base-config-setting/files/disk_ready.preinit
+          grep -qF 'overlay_size=$((1*1024))' feeds/x/base-config-setting/files/disk_ready.preinit || {
+            echo "错误: overlay 默认大小修改失败"; exit 1; }
 
-        # ---- 规范化 OpenWrt 配置（消除 out of sync，确保追加项生效）----
-        cp feeds/x/rom/lede/config.rockchip-armv8 .config
-        make defconfig
-        cp .config feeds/x/rom/lede/config.rockchip-armv8
-        echo "=== defconfig 后关键项 ==="
-        grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_BPF_EVENTS=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=|CONFIG_KERNEL_NAMESPACES=|CONFIG_KERNEL_NET_NS=|CONFIG_KERNEL_DEBUG_INFO_REDUCED' .config || true
-        grep -E '^CONFIG_PACKAGE_kselftests-bpf' .config || true
+          # ---- 规范化 OpenWrt 配置（消除 out of sync，确保追加项生效）----
+          cp feeds/x/rom/lede/config.rockchip-armv8 .config
+          make defconfig
+          cp .config feeds/x/rom/lede/config.rockchip-armv8
+          echo "=== defconfig 后关键项 ==="
+          grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_BPF_EVENTS=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=|CONFIG_KERNEL_NAMESPACES=|CONFIG_KERNEL_NET_NS=|CONFIG_KERNEL_DEBUG_INFO_REDUCED' .config || true
+          grep -E '^CONFIG_PACKAGE_kselftests-bpf|^CONFIG_PACKAGE_natcap|^# CONFIG_PACKAGE_(luci-app-natcap|kmod-natcap)' .config || true
 
-        # ---- 配置硬校验：任一关键项缺失立即失败，避免发布有问题的固件 ----
-        for key in \
-            'CONFIG_KERNEL_DEBUG_INFO=y' \
-            'CONFIG_KERNEL_DEBUG_INFO_BTF=y' \
-            'CONFIG_KERNEL_BPF_SYSCALL=y' \
-            'CONFIG_KERNEL_BPF_EVENTS=y' \
-            'CONFIG_KERNEL_CGROUPS=y' \
-            'CONFIG_KERNEL_XDP_SOCKETS=y' \
-            'CONFIG_KERNEL_NAMESPACES=y' \
-            'CONFIG_KERNEL_NET_NS=y' \
-            'CONFIG_KERNEL_IPV6_MULTIPLE_TABLES=y' \
-            'CONFIG_TARGET_ROOTFS_PARTSIZE=512'; do
-          grep -qxF "$key" .config || { echo "错误: defconfig 后缺少 $key"; exit 1; }
-        done
-        grep -qxF '# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set' .config || { echo "错误: DEBUG_INFO_REDUCED 未关闭"; exit 1; }
-        grep -qxF '# CONFIG_PACKAGE_kselftests-bpf is not set' .config || { echo "错误: kselftests-bpf 未显式关闭"; exit 1; }
-        echo "OpenWrt 配置校验通过"
+          # ---- 配置硬校验：任一关键项缺失立即失败，避免发布有问题的固件 ----
+          for key in \
+              'CONFIG_KERNEL_DEBUG_INFO=y' \
+              'CONFIG_KERNEL_DEBUG_INFO_BTF=y' \
+              'CONFIG_KERNEL_BPF_SYSCALL=y' \
+              'CONFIG_KERNEL_BPF_EVENTS=y' \
+              'CONFIG_KERNEL_CGROUPS=y' \
+              'CONFIG_KERNEL_XDP_SOCKETS=y' \
+              'CONFIG_KERNEL_NAMESPACES=y' \
+              'CONFIG_KERNEL_NET_NS=y' \
+              'CONFIG_KERNEL_IPV6_MULTIPLE_TABLES=y' \
+              'CONFIG_TARGET_ROOTFS_PARTSIZE=512'; do
+            grep -qxF "$key" .config || { echo "错误: defconfig 后缺少 $key"; exit 1; }
+          done
+          grep -qxF '# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set' .config || { echo "错误: DEBUG_INFO_REDUCED 未关闭"; exit 1; }
+          grep -qxF '# CONFIG_PACKAGE_kselftests-bpf is not set' .config || { echo "错误: kselftests-bpf 未显式关闭"; exit 1; }
+          if [ "$VARIANT" = "dae-nonatcap" ]; then
+            if grep -qE '^CONFIG_PACKAGE_(natcapd|natcapd-client|natcapd-server|luci-app-natcap|kmod-natcap)=y' .config; then
+              echo "错误: natcap 未完全关闭"; exit 1
+            fi
+            echo "natcap 已全部关闭"
+          fi
+          echo "OpenWrt 配置校验通过"
+        else
+          echo "=== 官方原版变体：不修改任何配置，保持 X-WRT 官方默认 ==="
+          grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
+        fi
 
         echo "=== 编译前磁盘空间 ==="
         df -h .
@@ -409,6 +476,7 @@ jobs:
         echo "================"
 
     - name: 验证内核 BTF 与模块配置
+      if: matrix.variant.id != 'official'
       run: |
         cd x-wrt
         echo "=== 内核 .config 关键项 ==="
@@ -488,13 +556,16 @@ jobs:
         cat ../firmware_paths.txt
 
     - name: 校验镜像分区表
+      env:
+        EXPECT_ROOTFS_SECTORS: ${{ matrix.variant.id == 'official' && 524288 || 1048576 }}
       run: |
         cd x-wrt
+        echo "期望 rootfs 分区扇区数: $EXPECT_ROOTFS_SECTORS (官方=256MB / dae=512MB)"
         while IFS= read -r IMG; do
           [ -n "$IMG" ] || continue
           echo "校验: $IMG"
-          python3 - "$IMG" <<'PYEOF'
-        import struct, sys
+          EXPECT_ROOTFS_SECTORS="$EXPECT_ROOTFS_SECTORS" python3 - "$IMG" <<'PYEOF'
+        import os, struct, sys
         img = sys.argv[1]
         with open(img, 'rb') as f:
             mbr = f.read(512)
@@ -510,7 +581,7 @@ jobs:
         print('partitions:', parts)
         assert len(parts) == 2, 'expected 2 partitions, got %d' % len(parts)
         assert parts[0][1] == 131072, 'kernel partition should be 64MiB'
-        assert parts[1][1] == 1048576, 'rootfs partition should be 512MiB'
+        assert parts[1][1] == int(os.environ['EXPECT_ROOTFS_SECTORS']), 'rootfs partition size mismatch'
         print('OK')
         PYEOF
         done < ../firmware_paths.txt
@@ -528,16 +599,16 @@ jobs:
         while IFS= read -r IMG_FULL; do
           [ -n "$IMG_FULL" ] || continue
           BASE=$(basename "$IMG_FULL")
-          VARIANT=$(echo "$BASE" | grep -oE '(squashfs|ext4)' | head -1)
-          [ -n "$VARIANT" ] || VARIANT="img"
+          VARIANT_TYPE=$(echo "$BASE" | grep -oE '(squashfs|ext4)' | head -1)
+          [ -n "$VARIANT_TYPE" ] || VARIANT_TYPE="img"
 
-          gzip -c "$IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VARIANT}-${VERSION_TAG}.img.gz"
-          sha256sum "$IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3-${VARIANT}-${VERSION_TAG}.sha256"
+          gzip -c "$IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3${SUFFIX}-${VARIANT_TYPE}-${VERSION_TAG}.img.gz"
+          sha256sum "$IMG_FULL" > "$OUTPUT_DIR/xwrt-r4s-ddr3${SUFFIX}-${VARIANT_TYPE}-${VERSION_TAG}.sha256"
         done < firmware_paths.txt
 
         {
-          echo 'X-WRT for NanoPi R4S DDR3 1GB (with dae)'
-          echo '=========================================='
+          echo "X-WRT for NanoPi R4S DDR3 1GB ($LABEL)"
+          echo '=================================================='
           echo ''
           echo "Version : $VERSION_TAG"
           echo "U-Boot  : immortalwrt $IMMWRT_TAG (rk3399_ddr_800MHz_v1.30.bin)"
@@ -545,29 +616,33 @@ jobs:
           echo ''
           echo 'Includes'
           echo '--------'
-          echo '- Kernel BTF (CONFIG_DEBUG_INFO_BTF) for dae CO-RE'
-          echo '- daed / luci-app-daede (kenzok8 feed)'
-          echo '- kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy'
+          if [ "$VARIANT" = "official" ]; then
+            echo '- 完全官方配置（无 dae、官方分区 256MB 系统）'
+            echo '- natcap 全家桶（官方默认）'
+          else
+            echo '- Kernel BTF (CONFIG_DEBUG_INFO_BTF) for dae CO-RE'
+            echo '- daed / luci-app-daede (kenzok8 feed)'
+            echo '- kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy'
+            echo '- 分区：只读系统 512MB + 软件 overlay 1024MB'
+            if [ "$VARIANT" = "dae-nonatcap" ]; then
+              echo '- 已移除 natcap（无远程管理/一键VPN/全锥形NAT）'
+            else
+              echo '- 保留 natcap（官方默认，含远程管理）'
+            fi
+          fi
           echo ''
           echo 'Files'
           echo '-----'
-          echo "- squashfs: xwrt-r4s-ddr3-squashfs-${VERSION_TAG}.img.gz"
-          echo "- ext4    : xwrt-r4s-ddr3-ext4-${VERSION_TAG}.img.gz"
+          echo "- squashfs: xwrt-r4s-ddr3${SUFFIX}-squashfs-${VERSION_TAG}.img.gz"
+          echo "- ext4    : xwrt-r4s-ddr3${SUFFIX}-ext4-${VERSION_TAG}.img.gz"
           echo ''
           echo 'Flash'
           echo '-----'
           echo '1. Verify checksum:'
-          echo "   sha256sum -c xwrt-r4s-ddr3-<variant>-${VERSION_TAG}.sha256"
+          echo "   sha256sum -c xwrt-r4s-ddr3${SUFFIX}-<variant>-${VERSION_TAG}.sha256"
           echo '2. Write the .img.gz to an SD card (balenaEtcher or dd)'
           echo '3. Boot on NanoPi R4S 1GB (DDR3)'
           echo '4. LuCI: http://192.168.15.1'
-          echo ''
-          echo 'Notes'
-          echo '-----'
-          echo '- Boot area (sector 64-32767) is replaced with immortalwrt U-Boot'
-          echo '- sysupgrade keeps U-Boot, so DDR3 support survives upgrades'
-          echo '- Flashing the official X-WRT image restores the LPDDR4-only U-Boot'
-          echo '- Check /sys/kernel/btf/vmlinux exists before starting dae'
         } > "$OUTPUT_DIR/README.txt"
 
         ls -lh "$OUTPUT_DIR/"
@@ -575,7 +650,7 @@ jobs:
     - name: 上传固件
       uses: actions/upload-artifact@v4
       with:
-        name: xwrt-r4s-ddr3-firmware
+        name: ${{ matrix.variant.id }}-firmware
         path: firmware/
         retention-days: 30
 
@@ -589,8 +664,8 @@ jobs:
         else
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "X-WRT R4S DDR3 1GB Firmware v$XWRT_TAG (daed $DAE_VER)" \
-            --notes "daed/daede feed $DAE_VER · U-Boot immortalwrt $IMMWRT_TAG" \
+            --title "X-WRT R4S DDR3 1GB Firmware ($LABEL) v$XWRT_TAG" \
+            --notes "变体: $LABEL · U-Boot immortalwrt $IMMWRT_TAG" \
             *.img.gz *.sha256 README.txt || true
         fi
         gh release upload "$RELEASE_TAG" *.img.gz *.sha256 README.txt \
