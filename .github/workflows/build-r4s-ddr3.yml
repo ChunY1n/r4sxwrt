@@ -273,6 +273,7 @@ jobs:
         CONFIG_KERNEL_CGROUPS=y
         CONFIG_KERNEL_XDP_SOCKETS=y
         CONFIG_KERNEL_NAMESPACES=y
+        CONFIG_KERNEL_NET_NS=y
         CONFIG_KERNEL_IPV6_MULTIPLE_TABLES=y
         # 关闭内核 BPF 测试套件（BTF 开启后会被 ALL_NONSHARED 自动选中，
         # 但它在 GitHub Actions 的主机 gcc 下无法编译）
@@ -344,7 +345,7 @@ jobs:
         make defconfig
         cp .config feeds/x/rom/lede/config.rockchip-armv8
         echo "=== defconfig 后关键项 ==="
-        grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_BPF_EVENTS=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=|CONFIG_KERNEL_DEBUG_INFO_REDUCED' .config || true
+        grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_BPF_EVENTS=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=|CONFIG_KERNEL_NAMESPACES=|CONFIG_KERNEL_NET_NS=|CONFIG_KERNEL_DEBUG_INFO_REDUCED' .config || true
         grep -E '^CONFIG_PACKAGE_kselftests-bpf' .config || true
 
         # 只读系统分区 512MB（系统实际占用约 330MB，够用）；
@@ -353,10 +354,6 @@ jobs:
         grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
         sed -i 's/overlay_size=\$((1\*512))/overlay_size=\$((1*1024))/' feeds/x/base-config-setting/files/disk_ready.preinit
         grep -n 'overlay_size=' feeds/x/base-config-setting/files/disk_ready.preinit | head -3
-
-        # 根分区 256MB 装不下 dae + geoip/geosite 数据，调整到 1GB
-        sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' feeds/x/rom/lede/config.rockchip-armv8
-        grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
 
         echo "=== 编译前磁盘空间 ==="
         df -h .
