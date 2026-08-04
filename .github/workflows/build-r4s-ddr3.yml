@@ -92,10 +92,6 @@ jobs:
 
   build:
     needs: check
-    if: |
-      (matrix.variant.id == 'dae' && needs.check.outputs.skip_dae != 'true') ||
-      (matrix.variant.id == 'dae-nonatcap' && needs.check.outputs.skip_dae_nonatcap != 'true') ||
-      (matrix.variant.id == 'official' && needs.check.outputs.skip_official != 'true')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -133,10 +129,19 @@ jobs:
         fi
         echo "变体=$LABEL 标签=$RELEASE_TAG"
 
+    - name: 检查是否已发布
+      id: check_release
+      run: |
+        if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "Release $RELEASE_TAG 已存在，跳过编译"
+        fi
+
     # ============================================================
     # 环境准备：安装依赖 + 清理磁盘空间
     # ============================================================
     - name: 初始化编译环境
+      if: steps.check_release.outputs.skip != 'true'
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
@@ -173,6 +178,7 @@ jobs:
     # 第一步：下载 immortalwrt 预编译固件（提取 DDR3 兼容的 U-Boot）
     # ============================================================
     - name: 下载 immortalwrt R4S 预编译固件
+      if: steps.check_release.outputs.skip != 'true'
       run: |
         mkdir -p immwrt
         cd immwrt
@@ -232,18 +238,21 @@ jobs:
     # 第二步：克隆并编译 X-WRT 固件
     # ============================================================
     - name: 克隆 X-WRT 源码
+      if: steps.check_release.outputs.skip != 'true'
       run: |
         git clone --depth 1 --branch "$XWRT_TAG" https://github.com/x-wrt/x-wrt.git
         echo "X-WRT 版本: $(cd x-wrt && git log --oneline -1)"
 
     - name: 更新 feeds
+      if: steps.check_release.outputs.skip != 'true'
       run: cd x-wrt && ./scripts/feeds update -a
 
     - name: 安装 feeds
+      if: steps.check_release.outputs.skip != 'true'
       run: cd x-wrt && ./scripts/feeds install -a
 
     - name: 添加 dae/daed 软件源
-      if: matrix.variant.id != 'official'
+      if: steps.check_release.outputs.skip != 'true' && matrix.variant.id != 'official'
       run: |
         cd x-wrt
         # dae / daed / luci-app-daede 来自 kenzok8 维护源（与 dae 2.x 配套）
@@ -253,6 +262,7 @@ jobs:
         ls package/feeds/daede/
 
     - name: 编译 X-WRT (rockchip-armv8)
+      if: steps.check_release.outputs.skip != 'true'
       run: |
         cd x-wrt
 
@@ -476,7 +486,7 @@ jobs:
         echo "================"
 
     - name: 验证内核 BTF 与模块配置
-      if: matrix.variant.id != 'official'
+      if: steps.check_release.outputs.skip != 'true' && matrix.variant.id != 'official'
       run: |
         cd x-wrt
         echo "=== 内核 .config 关键项 ==="
@@ -510,6 +520,7 @@ jobs:
     # 第三步：替换 U-Boot 引导区
     # ============================================================
     - name: 替换 U-Boot 引导区
+      if: steps.check_release.outputs.skip != 'true'
       run: |
         cd x-wrt
         rm -f ../firmware_paths.txt
@@ -556,6 +567,7 @@ jobs:
         cat ../firmware_paths.txt
 
     - name: 校验镜像分区表
+      if: steps.check_release.outputs.skip != 'true'
       env:
         EXPECT_ROOTFS_SECTORS: ${{ matrix.variant.id == 'official' && 524288 || 1048576 }}
       run: |
@@ -590,6 +602,7 @@ jobs:
     # 第四步：打包上传
     # ============================================================
     - name: 压缩固件
+      if: steps.check_release.outputs.skip != 'true'
       run: |
         OUTPUT_DIR="firmware"
         mkdir -p "$OUTPUT_DIR"
@@ -648,6 +661,7 @@ jobs:
         ls -lh "$OUTPUT_DIR/"
 
     - name: 上传固件
+      if: steps.check_release.outputs.skip != 'true'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.variant.id }}-firmware
@@ -655,6 +669,7 @@ jobs:
         retention-days: 30
 
     - name: 发布到 GitHub Release
+      if: steps.check_release.outputs.skip != 'true'
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
