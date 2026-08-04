@@ -272,6 +272,7 @@ jobs:
         CONFIG_KERNEL_KPROBE_EVENTS=y
         CONFIG_KERNEL_CGROUPS=y
         CONFIG_KERNEL_XDP_SOCKETS=y
+        CONFIG_KERNEL_NAMESPACES=y
         # 关闭内核 BPF 测试套件（BTF 开启后会被 ALL_NONSHARED 自动选中，
         # 但它在 GitHub Actions 的主机 gcc 下无法编译）
         # CONFIG_PACKAGE_kselftests-bpf is not set
@@ -294,6 +295,7 @@ jobs:
             -e 's/^# CONFIG_CGROUPS is not set$/CONFIG_CGROUPS=y/' \
             -e 's/^# CONFIG_KPROBES is not set$/CONFIG_KPROBES=y/' \
             -e 's/^# CONFIG_KPROBE_EVENTS is not set$/CONFIG_KPROBE_EVENTS=y/' \
+            -e 's/^# CONFIG_NAMESPACES is not set$/CONFIG_NAMESPACES=y/' \
             -e 's/^# CONFIG_DEBUG_INFO is not set$/CONFIG_DEBUG_INFO=y/' \
             -e 's/^# CONFIG_DEBUG_INFO_BTF is not set$/CONFIG_DEBUG_INFO_BTF=y/' \
             -e 's/^# CONFIG_NET_INGRESS is not set$/CONFIG_NET_INGRESS=y/' \
@@ -317,6 +319,8 @@ jobs:
         CONFIG_CGROUPS=y
         CONFIG_KPROBES=y
         CONFIG_KPROBE_EVENTS=y
+        CONFIG_NAMESPACES=y
+        CONFIG_NET_NS=y
         CONFIG_DEBUG_INFO=y
         CONFIG_DEBUG_INFO_BTF=y
         CONFIG_NET_INGRESS=y
@@ -369,7 +373,7 @@ jobs:
         echo "=== 内核 .config 关键项 ==="
         KCFG=$(find build_dir -type f -name .config -path '*linux-6.18*' 2>/dev/null | head -1)
         if [ -n "$KCFG" ]; then
-          grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS|VETH|NET_CLS_BPF|KPROBES|BPF_EVENTS)=' "$KCFG" || true
+          grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS|VETH|NET_CLS_BPF|KPROBES|BPF_EVENTS|NAMESPACES|NET_NS)=' "$KCFG" || true
         else
           echo "未找到内核 .config"
         fi
