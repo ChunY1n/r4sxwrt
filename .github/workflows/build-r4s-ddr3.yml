@@ -296,6 +296,15 @@ jobs:
         else
           echo "警告: 未找到 luci-app-natflow-users ACL 文件"
         fi
+        # 页面 JS 还会拿到 stat 解析后的 /bin/busybox 路径并直接执行，
+        # busybox 会把日志文件名当作命令名，导致页面空白；这里固定用 /bin/cat
+        URLLOG_JS=feeds/x/luci-app-natflow-users/htdocs/luci-static/resources/view/status/urllog.js
+        if [ -f "$URLLOG_JS" ]; then
+          sed -i 's|var logger = stat\[0\] ? stat\[0\].path : null;|var logger = "/bin/cat";|' "$URLLOG_JS"
+          grep -n 'logger' "$URLLOG_JS"
+        else
+          echo "警告: 未找到 urllog.js"
+        fi
 
         # ---- 直接修改内核 Kconfig 片段，确保 BPF/BTF 真正编进内核 ----
         for KCFG in target/linux/generic/config-6.18 target/linux/rockchip/config-6.18 target/linux/rockchip/armv8/config-6.18; do
