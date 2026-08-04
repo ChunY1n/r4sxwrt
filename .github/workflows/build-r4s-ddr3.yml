@@ -356,6 +356,7 @@ jobs:
         CONFIG_KERNEL_XDP_SOCKETS=y
         CONFIG_KERNEL_NAMESPACES=y
         CONFIG_KERNEL_NET_NS=y
+        CONFIG_KERNEL_CGROUP_BPF=y
         CONFIG_KERNEL_IPV6_MULTIPLE_TABLES=y
         CONFIG_DEVEL=y
         CONFIG_CCACHE=y
@@ -414,6 +415,7 @@ jobs:
               -e 's/^# CONFIG_KPROBE_EVENTS is not set$/CONFIG_KPROBE_EVENTS=y/' \
               -e 's/^# CONFIG_NAMESPACES is not set$/CONFIG_NAMESPACES=y/' \
               -e 's/^# CONFIG_IPV6_MULTIPLE_TABLES is not set$/CONFIG_IPV6_MULTIPLE_TABLES=y/' \
+              -e 's/^# CONFIG_CGROUP_BPF is not set$/CONFIG_CGROUP_BPF=y/' \
               -e 's/^# CONFIG_DEBUG_INFO is not set$/CONFIG_DEBUG_INFO=y/' \
               -e 's/^# CONFIG_DEBUG_INFO_BTF is not set$/CONFIG_DEBUG_INFO_BTF=y/' \
               -e 's/^# CONFIG_NET_INGRESS is not set$/CONFIG_NET_INGRESS=y/' \
@@ -439,6 +441,7 @@ jobs:
         CONFIG_KPROBE_EVENTS=y
         CONFIG_NAMESPACES=y
         CONFIG_NET_NS=y
+        CONFIG_CGROUP_BPF=y
         CONFIG_IPV6_MULTIPLE_TABLES=y
         CONFIG_DEBUG_INFO=y
         CONFIG_DEBUG_INFO_BTF=y
@@ -481,6 +484,7 @@ jobs:
               'CONFIG_KERNEL_XDP_SOCKETS=y' \
               'CONFIG_KERNEL_NAMESPACES=y' \
               'CONFIG_KERNEL_NET_NS=y' \
+              'CONFIG_KERNEL_CGROUP_BPF=y' \
               'CONFIG_KERNEL_IPV6_MULTIPLE_TABLES=y' \
               'CONFIG_TARGET_ROOTFS_PARTSIZE=512'; do
             grep -qxF "$key" .config || { echo "错误: defconfig 后缺少 $key"; exit 1; }
@@ -523,7 +527,7 @@ jobs:
         KCFG=$(find build_dir -type f -name .config -path '*linux-6.18*' 2>/dev/null | head -1)
         [ -n "$KCFG" ] || { echo "错误: 未找到内核 .config"; exit 1; }
         echo "内核配置: $KCFG"
-        grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS|VETH|NET_CLS_BPF|NET_ACT_BPF|NET_CLS_ACT|NET_SCH_INGRESS|KPROBES|BPF_EVENTS|NAMESPACES|NET_NS|IPV6_MULTIPLE_TABLES|XDP_SOCKETS|XDP_SOCKETS_DIAG)=' "$KCFG"
+        grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS|CGROUP_BPF|VETH|NET_CLS_BPF|NET_ACT_BPF|NET_CLS_ACT|NET_SCH_INGRESS|KPROBES|BPF_EVENTS|NAMESPACES|NET_NS|IPV6_MULTIPLE_TABLES|XDP_SOCKETS|XDP_SOCKETS_DIAG)=' "$KCFG"
         # 任一关键项缺失立即失败
         for key in \
             'CONFIG_BPF_SYSCALL=y' \
@@ -532,6 +536,7 @@ jobs:
             'CONFIG_CGROUPS=y' \
             'CONFIG_NAMESPACES=y' \
             'CONFIG_NET_NS=y' \
+            'CONFIG_CGROUP_BPF=y' \
             'CONFIG_IPV6_MULTIPLE_TABLES=y' \
             'CONFIG_BPF_EVENTS=y' \
             'CONFIG_KPROBES=y' \
