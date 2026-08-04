@@ -115,6 +115,11 @@ jobs:
       VARIANT: ${{ matrix.variant.id }}
       SUFFIX: ${{ matrix.variant.suffix }}
       LABEL: ${{ matrix.variant.label }}
+      CCACHE_DIR: ${{ github.workspace }}/x-wrt/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: 'true'
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 3G
 
     steps:
     - name: Checkout
@@ -251,6 +256,26 @@ jobs:
       if: steps.check_release.outputs.skip != 'true'
       run: cd x-wrt && ./scripts/feeds install -a
 
+    - name: 恢复工具链缓存
+      if: steps.check_release.outputs.skip != 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          x-wrt/staging_dir/toolchain-*
+          x-wrt/staging_dir/host
+        key: xwrt-toolchain-v1-${{ env.XWRT_TAG }}-rockchip-armv8
+        restore-keys: |
+          xwrt-toolchain-v1-
+
+    - name: 恢复 ccache
+      if: steps.check_release.outputs.skip != 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: x-wrt/.ccache
+        key: xwrt-ccache-v1-${{ env.XWRT_TAG }}-rockchip-armv8
+        restore-keys: |
+          xwrt-ccache-v1-
+
     - name: 添加 dae/daed 软件源
       if: steps.check_release.outputs.skip != 'true' && matrix.variant.id != 'official'
       run: |
@@ -332,6 +357,8 @@ jobs:
         CONFIG_KERNEL_NAMESPACES=y
         CONFIG_KERNEL_NET_NS=y
         CONFIG_KERNEL_IPV6_MULTIPLE_TABLES=y
+        CONFIG_DEVEL=y
+        CONFIG_CCACHE=y
         # 关闭内核 BPF 测试套件（BTF 开启后会被 ALL_NONSHARED 自动选中，
         # 但它在 GitHub Actions 的主机 gcc 下无法编译）
         # CONFIG_PACKAGE_kselftests-bpf is not set
@@ -469,6 +496,9 @@ jobs:
           echo "OpenWrt 配置校验通过"
         else
           echo "=== 官方原版变体：不修改任何配置，保持 X-WRT 官方默认 ==="
+          # 仅编译加速选项（不影响固件内容）
+          echo 'CONFIG_DEVEL=y' >> feeds/x/rom/lede/config.rockchip-armv8
+          echo 'CONFIG_CCACHE=y' >> feeds/x/rom/lede/config.rockchip-armv8
           grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
         fi
 
@@ -597,6 +627,22 @@ jobs:
         print('OK')
         PYEOF
         done < ../firmware_paths.txt
+
+    - name: 保存工具链缓存
+      if: steps.check_release.outputs.skip != 'true' && matrix.variant.id == 'dae'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          x-wrt/staging_dir/toolchain-*
+          x-wrt/staging_dir/host
+        key: xwrt-toolchain-v1-${{ env.XWRT_TAG }}-rockchip-armv8
+
+    - name: 保存 ccache
+      if: steps.check_release.outputs.skip != 'true' && matrix.variant.id == 'dae'
+      uses: actions/cache/save@v4
+      with:
+        path: x-wrt/.ccache
+        key: xwrt-ccache-v1-${{ env.XWRT_TAG }}-rockchip-armv8
 
     # ============================================================
     # 第四步：打包上传
