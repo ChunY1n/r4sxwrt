@@ -285,6 +285,18 @@ jobs:
         sed -i '/^CONFIG_PACKAGE_kselftests-bpf=/d' feeds/x/rom/lede/config.rockchip-armv8
         echo '# CONFIG_PACKAGE_kselftests-bpf is not set' >> feeds/x/rom/lede/config.rockchip-armv8
 
+        # ---- 修复官方 URL 日志页 ACL bug ----
+        # cgi-io 执行前会把 /bin/cat（busybox 软链接）解析为 /bin/busybox 再匹配 ACL，
+        # 官方只授权了 /bin/cat /tmp/url.log，导致页面报 "Access to command denied by ACL"
+        ACL_JSON=feeds/x/luci-app-natflow-users/root/usr/share/rpcd/acl.d/luci-app-natflow-users.json
+        if [ -f "$ACL_JSON" ]; then
+          grep -q '"/bin/busybox /tmp/url.log"' "$ACL_JSON" || \
+            sed -i 's|"/bin/cat /tmp/url.log": \[ "exec" \]|"/bin/cat /tmp/url.log": [ "exec" ],\n\t\t\t\t"/bin/busybox /tmp/url.log": [ "exec" ]|' "$ACL_JSON"
+          grep -n 'url.log' "$ACL_JSON"
+        else
+          echo "警告: 未找到 luci-app-natflow-users ACL 文件"
+        fi
+
         # ---- 直接修改内核 Kconfig 片段，确保 BPF/BTF 真正编进内核 ----
         for KCFG in target/linux/generic/config-6.18 target/linux/rockchip/config-6.18 target/linux/rockchip/armv8/config-6.18; do
           [ -f "$KCFG" ] || continue
