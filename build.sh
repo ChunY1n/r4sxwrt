@@ -38,7 +38,14 @@ if [ "x$_EXIT" = "x0" ]; then
     done
     echo "===================="
 else
-    echo "Build failed with exit code $_EXIT, retrying with V=s for error details..."
-    make V=s 2>&1 | tail -300
-    exit $_EXIT
+    echo "首次编译失败（退出码 $_EXIT），用 V=s 完整重试..."
+    if make V=s >/tmp/xwrt-retry.log 2>&1; then
+        echo "V=s 重试成功，继续后续流程"
+        tail -300 /tmp/xwrt-retry.log
+        exit 0
+    else
+        echo "V=s 重试仍失败"
+        tail -300 /tmp/xwrt-retry.log
+        exit $_EXIT
+    fi
 fi
