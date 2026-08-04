@@ -54,7 +54,7 @@ jobs:
             return 1
           }
           if [ -z "$INPUT_TAG" ] || [ "$INPUT_TAG" = "latest" ]; then
-            XWRT_TAG=$(resolve_api "https://api.github.com/repos/x-wrt/x-wrt/tags" '[.[].name] | map(select(startswith("26.04_b"))) | sort | last' || true)
+            XWRT_TAG=$(resolve_api "https://api.github.com/repos/x-wrt/x-wrt/tags?per_page=100" '[.[].name] | map(select(startswith("26.04_b"))) | sort | last' || true)
           else
             XWRT_TAG="$INPUT_TAG"
           fi
