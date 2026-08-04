@@ -272,9 +272,15 @@ jobs:
         CONFIG_KERNEL_KPROBE_EVENTS=y
         CONFIG_KERNEL_CGROUPS=y
         CONFIG_KERNEL_XDP_SOCKETS=y
+        # 关闭内核 BPF 测试套件（BTF 开启后会被 ALL_NONSHARED 自动选中，
+        # 但它在 GitHub Actions 的主机 gcc 下无法编译）
+        # CONFIG_PACKAGE_kselftests-bpf is not set
         EOF
         # 关闭精简调试信息（BTF 生成要求非 reduced 模式）
         sed -i 's/^CONFIG_KERNEL_DEBUG_INFO_REDUCED=y/# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set/' feeds/x/rom/lede/config.rockchip-armv8
+        # 确保 kselftests-bpf 显式不选
+        sed -i '/^CONFIG_PACKAGE_kselftests-bpf=/d' feeds/x/rom/lede/config.rockchip-armv8
+        echo '# CONFIG_PACKAGE_kselftests-bpf is not set' >> feeds/x/rom/lede/config.rockchip-armv8
 
         # ---- 直接修改内核 Kconfig 片段，确保 BPF/BTF 真正编进内核 ----
         for KCFG in target/linux/generic/config-6.18 target/linux/rockchip/config-6.18; do
@@ -332,6 +338,7 @@ jobs:
         cp .config feeds/x/rom/lede/config.rockchip-armv8
         echo "=== defconfig 后关键项 ==="
         grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_BPF_EVENTS=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=|CONFIG_KERNEL_DEBUG_INFO_REDUCED' .config || true
+        grep -E '^CONFIG_PACKAGE_kselftests-bpf' .config || true
 
         # 根分区 256MB 装不下 dae + geoip/geosite 数据，调整到 1GB
         sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' feeds/x/rom/lede/config.rockchip-armv8
