@@ -286,7 +286,7 @@ jobs:
         echo '# CONFIG_PACKAGE_kselftests-bpf is not set' >> feeds/x/rom/lede/config.rockchip-armv8
 
         # ---- 直接修改内核 Kconfig 片段，确保 BPF/BTF 真正编进内核 ----
-        for KCFG in target/linux/generic/config-6.18 target/linux/rockchip/config-6.18; do
+        for KCFG in target/linux/generic/config-6.18 target/linux/rockchip/config-6.18 target/linux/rockchip/armv8/config-6.18; do
           [ -f "$KCFG" ] || continue
           sed -i \
             -e 's/^# CONFIG_BPF_SYSCALL is not set$/CONFIG_BPF_SYSCALL=y/' \
@@ -340,6 +340,14 @@ jobs:
         grep -E 'CONFIG_PACKAGE_dae=|CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=' feeds/x/rom/lede/config.rockchip-armv8
         grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS)=' target/linux/generic/config-6.18
 
+        # 只读系统分区 512MB（系统实际占用约 330MB，够用）；
+        # 软件分区（overlay）由 X-WRT 首次开机自动创建，下面把默认值改为 1024MB
+        sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=512/' feeds/x/rom/lede/config.rockchip-armv8
+        grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
+        sed -i 's/overlay_size=\$((1\*512))/overlay_size=\$((1*1024))/' feeds/x/base-config-setting/files/disk_ready.preinit
+        grep -qF 'overlay_size=$((1*1024))' feeds/x/base-config-setting/files/disk_ready.preinit || {
+          echo "错误: overlay 默认大小修改失败"; exit 1; }
+
         # ---- 规范化 OpenWrt 配置（消除 out of sync，确保追加项生效）----
         cp feeds/x/rom/lede/config.rockchip-armv8 .config
         make defconfig
@@ -348,12 +356,23 @@ jobs:
         grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_BPF_EVENTS=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=|CONFIG_KERNEL_NAMESPACES=|CONFIG_KERNEL_NET_NS=|CONFIG_KERNEL_DEBUG_INFO_REDUCED' .config || true
         grep -E '^CONFIG_PACKAGE_kselftests-bpf' .config || true
 
-        # 只读系统分区 512MB（系统实际占用约 330MB，够用）；
-        # 软件分区（overlay）由 X-WRT 首次开机自动创建，下面把默认值改为 1024MB
-        sed -i 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=512/' feeds/x/rom/lede/config.rockchip-armv8
-        grep '^CONFIG_TARGET_ROOTFS_PARTSIZE' feeds/x/rom/lede/config.rockchip-armv8
-        sed -i 's/overlay_size=\$((1\*512))/overlay_size=\$((1*1024))/' feeds/x/base-config-setting/files/disk_ready.preinit
-        grep -n 'overlay_size=' feeds/x/base-config-setting/files/disk_ready.preinit | head -3
+        # ---- 配置硬校验：任一关键项缺失立即失败，避免发布有问题的固件 ----
+        for key in \
+            'CONFIG_KERNEL_DEBUG_INFO=y' \
+            'CONFIG_KERNEL_DEBUG_INFO_BTF=y' \
+            'CONFIG_KERNEL_BPF_SYSCALL=y' \
+            'CONFIG_KERNEL_BPF_EVENTS=y' \
+            'CONFIG_KERNEL_CGROUPS=y' \
+            'CONFIG_KERNEL_XDP_SOCKETS=y' \
+            'CONFIG_KERNEL_NAMESPACES=y' \
+            'CONFIG_KERNEL_NET_NS=y' \
+            'CONFIG_KERNEL_IPV6_MULTIPLE_TABLES=y' \
+            'CONFIG_TARGET_ROOTFS_PARTSIZE=512'; do
+          grep -qxF "$key" .config || { echo "错误: defconfig 后缺少 $key"; exit 1; }
+        done
+        grep -qxF '# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set' .config || { echo "错误: DEBUG_INFO_REDUCED 未关闭"; exit 1; }
+        grep -qxF '# CONFIG_PACKAGE_kselftests-bpf is not set' .config || { echo "错误: kselftests-bpf 未显式关闭"; exit 1; }
+        echo "OpenWrt 配置校验通过"
 
         echo "=== 编译前磁盘空间 ==="
         df -h .
@@ -371,15 +390,32 @@ jobs:
     - name: 验证内核 BTF 与模块配置
       run: |
         cd x-wrt
-        echo "=== OpenWrt .config 关键项 ==="
-        grep -E 'CONFIG_KERNEL_DEBUG_INFO_BTF=|CONFIG_KERNEL_BPF_SYSCALL=|CONFIG_KERNEL_CGROUPS=|CONFIG_KERNEL_XDP_SOCKETS=' .config || true
         echo "=== 内核 .config 关键项 ==="
         KCFG=$(find build_dir -type f -name .config -path '*linux-6.18*' 2>/dev/null | head -1)
-        if [ -n "$KCFG" ]; then
-          grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS|VETH|NET_CLS_BPF|KPROBES|BPF_EVENTS|NAMESPACES|NET_NS|IPV6_MULTIPLE_TABLES)=' "$KCFG" || true
-        else
-          echo "未找到内核 .config"
-        fi
+        [ -n "$KCFG" ] || { echo "错误: 未找到内核 .config"; exit 1; }
+        echo "内核配置: $KCFG"
+        grep -E 'CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUPS|VETH|NET_CLS_BPF|NET_ACT_BPF|NET_CLS_ACT|NET_SCH_INGRESS|KPROBES|BPF_EVENTS|NAMESPACES|NET_NS|IPV6_MULTIPLE_TABLES|XDP_SOCKETS|XDP_SOCKETS_DIAG)=' "$KCFG"
+        # 任一关键项缺失立即失败
+        for key in \
+            'CONFIG_BPF_SYSCALL=y' \
+            'CONFIG_BPF_JIT=y' \
+            'CONFIG_DEBUG_INFO_BTF=y' \
+            'CONFIG_CGROUPS=y' \
+            'CONFIG_NAMESPACES=y' \
+            'CONFIG_NET_NS=y' \
+            'CONFIG_IPV6_MULTIPLE_TABLES=y' \
+            'CONFIG_BPF_EVENTS=y' \
+            'CONFIG_KPROBES=y' \
+            'CONFIG_VETH=m' \
+            'CONFIG_NET_CLS_BPF=m' \
+            'CONFIG_NET_ACT_BPF=m' \
+            'CONFIG_NET_CLS_ACT=y' \
+            'CONFIG_NET_SCH_INGRESS=m' \
+            'CONFIG_XDP_SOCKETS=y' \
+            'CONFIG_XDP_SOCKETS_DIAG=m'; do
+          grep -qxF "$key" "$KCFG" || { echo "错误: 内核缺少 $key"; exit 1; }
+        done
+        echo "内核配置校验通过"
 
     # ============================================================
     # 第三步：替换 U-Boot 引导区
@@ -429,6 +465,34 @@ jobs:
 
         echo "=== 输出固件列表 ==="
         cat ../firmware_paths.txt
+
+    - name: 校验镜像分区表
+      run: |
+        cd x-wrt
+        while IFS= read -r IMG; do
+          [ -n "$IMG" ] || continue
+          echo "校验: $IMG"
+          python3 - "$IMG" <<'PYEOF'
+        import struct, sys
+        img = sys.argv[1]
+        with open(img, 'rb') as f:
+            mbr = f.read(512)
+        assert mbr[510:512] == b'\x55\xaa', 'MBR signature'
+        parts = []
+        for i in range(4):
+            e = mbr[446 + i*16 : 446 + (i+1)*16]
+            if e[4] == 0 and e[8:12] == b'\x00'*4:
+                continue
+            start = struct.unpack_from('<I', e, 8)[0]
+            size = struct.unpack_from('<I', e, 12)[0]
+            parts.append((start, size))
+        print('partitions:', parts)
+        assert len(parts) == 2, 'expected 2 partitions, got %d' % len(parts)
+        assert parts[0][1] == 131072, 'kernel partition should be 64MiB'
+        assert parts[1][1] == 1048576, 'rootfs partition should be 512MiB'
+        print('OK')
+        PYEOF
+        done < ../firmware_paths.txt
 
     # ============================================================
     # 第四步：打包上传
