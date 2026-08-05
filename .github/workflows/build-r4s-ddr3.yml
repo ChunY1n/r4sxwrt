@@ -297,6 +297,11 @@ jobs:
           sed -i 's|LLVM_PATH:=/invalid|LLVM_PATH:=$(dir $(shell command -v clang))|' include/bpf.mk
           grep -n 'LLVM_PATH:=' include/bpf.mk
           command -v clang && clang --version | head -1
+
+          # daede feed 已 install 进编译树（包仍会编入固件）；
+          # 从 feeds.conf.default 移除该行，避免 distfeeds.list 生成死链
+          sed -i '/^src-git daede /d' feeds.conf.default
+          grep -c '^src-git daede ' feeds.conf.default || echo "daede feed 行已从 feeds.conf.default 移除"
         fi
 
         cp ../build.sh .
