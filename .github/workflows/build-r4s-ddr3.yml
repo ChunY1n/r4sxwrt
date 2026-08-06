@@ -302,6 +302,29 @@ jobs:
           # 从 feeds.conf.default 移除该行，避免 distfeeds.list 生成死链
           sed -i '/^src-git daede /d' feeds.conf.default
           grep -c '^src-git daede ' feeds.conf.default || echo "daede feed 行已从 feeds.conf.default 移除"
+
+          # ---- 把 daede 真实源烤进固件（在线更新不依赖死链） ----
+          # 与官方 setup 脚本一致：apk -> SDK 25.12，本机架构 aarch64_generic
+          APK_FEEDS=package/system/apk/files/customfeeds.list
+          if [ -f "$APK_FEEDS" ]; then
+            grep -q 'down.dllkids.xyz' "$APK_FEEDS" || cat >> "$APK_FEEDS" <<'EOF'
+
+        # daede 真实源（dae/daed/luci-app-daede 在线更新）
+        https://down.dllkids.xyz/openwrt-feed/25.12/aarch64_generic/packages.adb
+        EOF
+            grep -q '^https://down.dllkids.xyz/openwrt-feed/25.12/aarch64_generic/packages.adb$' "$APK_FEEDS" || {
+              echo "错误: 真实源未写入 customfeeds.list"; exit 1; }
+          else
+            echo "错误: 未找到 $APK_FEEDS"; exit 1
+          fi
+
+          # apk 校验 dllkids 源需要 ECDSA 公钥，一并烤进固件
+          mkdir -p package/base-files/files/etc/apk/keys
+          curl -fsSL --retry 3 -o package/base-files/files/etc/apk/keys/dllkids-feed.pub.pem \
+            https://down.dllkids.xyz/openwrt-feed/keys/dllkids-feed.pub.pem
+          chmod 644 package/base-files/files/etc/apk/keys/dllkids-feed.pub.pem
+          grep -q 'BEGIN PUBLIC KEY' package/base-files/files/etc/apk/keys/dllkids-feed.pub.pem || {
+            echo "错误: dllkids 公钥下载异常"; exit 1; }
         fi
 
         cp ../build.sh .
@@ -498,6 +521,9 @@ jobs:
           done
           grep -qxF '# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set' .config || { echo "错误: DEBUG_INFO_REDUCED 未关闭"; exit 1; }
           grep -qxF '# CONFIG_PACKAGE_kselftests-bpf is not set' .config || { echo "错误: kselftests-bpf 未显式关闭"; exit 1; }
+          grep -qE '^CONFIG_FEED_daede(=y|=m)$' .config && { echo "错误: CONFIG_FEED_daede 仍启用，distfeeds 会生成死链"; exit 1; }
+          grep -q '^https://down.dllkids.xyz/openwrt-feed/25.12/aarch64_generic/packages.adb$' package/system/apk/files/customfeeds.list || { echo "错误: customfeeds.list 缺少真实源"; exit 1; }
+          test -s package/base-files/files/etc/apk/keys/dllkids-feed.pub.pem || { echo "错误: dllkids 公钥未写入 base-files"; exit 1; }
           if [ "$VARIANT" = "dae-nonatcap" ]; then
             if grep -qE '^CONFIG_PACKAGE_(natcapd|natcapd-client|natcapd-server|luci-app-natcap|kmod-natcap)=y' .config; then
               echo "错误: natcap 未完全关闭"; exit 1
