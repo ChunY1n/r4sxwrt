@@ -3,13 +3,13 @@
 # 原理：编译 X-WRT 标准固件后，用 immortalwrt 的 U-Boot 引导区替换，
 # 支持 DDR3 1GB 版本（rk3399_ddr_800MHz_v1.30.bin DDR 初始化，自动识别 DDR3/LPDDR4）
 #
-# 一次并行编译三个版本：
-#   1. dae       : 官方配置 + dae/daed（luci-app-daede）+ natcap，分区 512MB 系统 / 1024MB 软件
-#   2. dae-nonatcap : 同上但移除 natcap（无远程管理/一键VPN/全锥形NAT）
-#   3. official  : 完全官方（无 dae、保留 natcap、官方 256MB 系统分区、官方默认配置）
+# 一次并行编译两个版本：
+#   1. dae-nonatcap : 官方配置 + dae/daed（luci-app-daede），移除 natcap 与 natflow
+#                     （无远程管理/一键VPN/全锥形NAT/软件加速/URL日志），分区 512MB 系统 / 1024MB 软件
+#   2. official  : 完全官方（无 dae、保留 natcap、官方 256MB 系统分区、官方默认配置）
 #
-# 三个版本都包含：
-# - 内核完整 eBPF/BTF（仅 dae 两个版本；官方版保持原样）
+# 两个版本都包含：
+# - 内核完整 eBPF/BTF（仅 dae 版本；官方版保持原样）
 # - 只生成 R4S 设备镜像（不影响固件内容，仅缩短编译时间）
 # - immortalwrt DDR3 U-Boot 引导区
 
@@ -35,7 +35,6 @@ jobs:
     outputs:
       xwrt_tag: ${{ steps.resolve.outputs.xwrt_tag }}
       dae_ver: ${{ steps.resolve.outputs.dae_ver }}
-      skip_dae: ${{ steps.resolve.outputs.skip_dae }}
       skip_dae_nonatcap: ${{ steps.resolve.outputs.skip_dae_nonatcap }}
       skip_official: ${{ steps.resolve.outputs.skip_official }}
     steps:
@@ -74,7 +73,6 @@ jobs:
           echo "xwrt_tag=$XWRT_TAG" >> "$GITHUB_OUTPUT"
           echo "dae_ver=$DAE_VER" >> "$GITHUB_OUTPUT"
 
-          DEFAULT_REL="xwrt-r4s-ddr3-v${XWRT_TAG}-${DAE_VER#v}"
           NONATCAP_REL="xwrt-r4s-ddr3-nonatcap-v${XWRT_TAG}-${DAE_VER#v}"
           OFFICIAL_REL="xwrt-r4s-ddr3-official-v${XWRT_TAG}"
           check_release() {
@@ -86,7 +84,6 @@ jobs:
               echo "需要编译: $tag"
             fi
           }
-          check_release dae "$DEFAULT_REL"
           check_release dae_nonatcap "$NONATCAP_REL"
           check_release official "$OFFICIAL_REL"
 
@@ -99,9 +96,6 @@ jobs:
       fail-fast: false
       matrix:
         variant:
-          - id: dae
-            suffix: ''
-            label: dae+natcap
           - id: dae-nonatcap
             suffix: '-nonatcap'
             label: dae无natcap
@@ -398,14 +392,20 @@ jobs:
           sed -i '/^CONFIG_PACKAGE_kselftests-bpf=/d' feeds/x/rom/lede/config.rockchip-armv8
           echo '# CONFIG_PACKAGE_kselftests-bpf is not set' >> feeds/x/rom/lede/config.rockchip-armv8
 
-          # dae 无 natcap 变体：显式关闭 natcap 全家桶
+          # dae 无 natcap 变体：显式关闭 natcap 全家桶 + natflow 全家桶
           if [ "$VARIANT" = "dae-nonatcap" ]; then
-            sed -i -E 's/^(CONFIG_PACKAGE_(natcapd|natcapd-client|natcapd-server))=(y|m)/# \1 is not set/' feeds/x/rom/lede/config.rockchip-armv8
+            sed -i -E 's/^(CONFIG_PACKAGE_(natcapd|natcapd-client|natcapd-server|kmod-natflow|natflow-auth|natflow-boot|natflow-hostacl|luci-app-natflow-users|urllogger))=(y|m)/# \1 is not set/' feeds/x/rom/lede/config.rockchip-armv8
             cat >> feeds/x/rom/lede/config.rockchip-armv8 <<'EOF'
         # CONFIG_PACKAGE_luci-app-natcap is not set
         # CONFIG_PACKAGE_kmod-natcap is not set
+        # CONFIG_PACKAGE_kmod-natflow is not set
+        # CONFIG_PACKAGE_natflow-auth is not set
+        # CONFIG_PACKAGE_natflow-boot is not set
+        # CONFIG_PACKAGE_natflow-hostacl is not set
+        # CONFIG_PACKAGE_luci-app-natflow-users is not set
+        # CONFIG_PACKAGE_urllogger is not set
         EOF
-            grep -E '^CONFIG_PACKAGE_natcap|^# CONFIG_PACKAGE_(luci-app-natcap|kmod-natcap)' feeds/x/rom/lede/config.rockchip-armv8 || true
+            grep -E '^CONFIG_PACKAGE_natcap|^CONFIG_PACKAGE_natflow|^# CONFIG_PACKAGE_(luci-app-natcap|kmod-natcap|kmod-natflow|natflow-auth|natflow-boot|natflow-hostacl|luci-app-natflow-users|urllogger)' feeds/x/rom/lede/config.rockchip-armv8 || true
           fi
 
           # ---- 修复官方 URL 日志页 ACL bug ----
@@ -525,10 +525,10 @@ jobs:
           grep -q '^https://down.dllkids.xyz/openwrt-feed/25.12/aarch64_generic/packages.adb$' package/system/apk/files/customfeeds.list || { echo "错误: customfeeds.list 缺少真实源"; exit 1; }
           test -s package/base-files/files/etc/apk/keys/dllkids-feed.pub.pem || { echo "错误: dllkids 公钥未写入 base-files"; exit 1; }
           if [ "$VARIANT" = "dae-nonatcap" ]; then
-            if grep -qE '^CONFIG_PACKAGE_(natcapd|natcapd-client|natcapd-server|luci-app-natcap|kmod-natcap)=y' .config; then
-              echo "错误: natcap 未完全关闭"; exit 1
+            if grep -qE '^CONFIG_PACKAGE_(natcapd|natcapd-client|natcapd-server|luci-app-natcap|kmod-natcap|kmod-natflow|natflow-auth|natflow-boot|natflow-hostacl|luci-app-natflow-users|urllogger)=y' .config; then
+              echo "错误: natcap/natflow 未完全关闭"; exit 1
             fi
-            echo "natcap 已全部关闭"
+            echo "natcap 与 natflow 已全部关闭"
           fi
           echo "OpenWrt 配置校验通过"
         else
@@ -668,7 +668,7 @@ jobs:
         done < ../firmware_paths.txt
 
     - name: 保存工具链缓存
-      if: steps.check_release.outputs.skip != 'true' && matrix.variant.id == 'dae'
+      if: steps.check_release.outputs.skip != 'true' && matrix.variant.id == 'dae-nonatcap'
       uses: actions/cache/save@v4
       with:
         path: |
@@ -677,7 +677,7 @@ jobs:
         key: xwrt-toolchain-v1-${{ env.XWRT_TAG }}-rockchip-armv8
 
     - name: 保存 ccache
-      if: steps.check_release.outputs.skip != 'true' && matrix.variant.id == 'dae'
+      if: steps.check_release.outputs.skip != 'true' && matrix.variant.id == 'dae-nonatcap'
       uses: actions/cache/save@v4
       with:
         path: x-wrt/.ccache
@@ -722,11 +722,7 @@ jobs:
             echo '- daed / luci-app-daede (kenzok8 feed)'
             echo '- kmod-sched-core / sched-bpf / veth / xdp-sockets-diag / nft-tproxy'
             echo '- 分区：只读系统 512MB + 软件 overlay 1024MB'
-            if [ "$VARIANT" = "dae-nonatcap" ]; then
-              echo '- 已移除 natcap（无远程管理/一键VPN/全锥形NAT）'
-            else
-              echo '- 保留 natcap（官方默认，含远程管理）'
-            fi
+            echo '- 已移除 natcap 与 natflow（无远程管理/一键VPN/全锥形NAT/软件加速/URL日志）'
           fi
           echo ''
           echo 'Files'
