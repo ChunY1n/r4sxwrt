@@ -370,6 +370,9 @@ jobs:
         CONFIG_KERNEL_DEBUG_INFO=y
         # CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set
         CONFIG_KERNEL_DEBUG_INFO_BTF=y
+        # 内核已内置 BTF，强制 dae/daed 使用内核 BTF，绝不拉入 vmlinux-btf 补丁包
+        CONFIG_DAE_USE_KERNEL_BTF=y
+        # CONFIG_DAE_USE_VMLINUX_BTF is not set
         CONFIG_KERNEL_BPF_SYSCALL=y
         CONFIG_KERNEL_BPF_EVENTS=y
         CONFIG_KERNEL_KPROBES=y
@@ -508,6 +511,7 @@ jobs:
           for key in \
               'CONFIG_KERNEL_DEBUG_INFO=y' \
               'CONFIG_KERNEL_DEBUG_INFO_BTF=y' \
+              'CONFIG_DAE_USE_KERNEL_BTF=y' \
               'CONFIG_KERNEL_BPF_SYSCALL=y' \
               'CONFIG_KERNEL_BPF_EVENTS=y' \
               'CONFIG_KERNEL_CGROUPS=y' \
@@ -520,6 +524,7 @@ jobs:
             grep -qxF "$key" .config || { echo "错误: defconfig 后缺少 $key"; exit 1; }
           done
           grep -qxF '# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set' .config || { echo "错误: DEBUG_INFO_REDUCED 未关闭"; exit 1; }
+          grep -qxF '# CONFIG_DAE_USE_VMLINUX_BTF is not set' .config || { echo "错误: DAE_USE_VMLINUX_BTF 未关闭（vmlinux-btf 会被编入固件）"; exit 1; }
           grep -qxF '# CONFIG_PACKAGE_kselftests-bpf is not set' .config || { echo "错误: kselftests-bpf 未显式关闭"; exit 1; }
           grep -qE '^CONFIG_FEED_daede(=y|=m)$' .config && { echo "错误: CONFIG_FEED_daede 仍启用，distfeeds 会生成死链"; exit 1; }
           grep -q '^https://down.dllkids.xyz/openwrt-feed/25.12/aarch64_generic/packages.adb$' package/system/apk/files/customfeeds.list || { echo "错误: customfeeds.list 缺少真实源"; exit 1; }
